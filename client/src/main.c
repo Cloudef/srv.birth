@@ -269,7 +269,7 @@ static void handleFullState(ClientData *data, ENetEvent *event)
 
    puts("GOT FULL STATE");
    gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
-   client->actor.toRotation = BamsToF(packet->rotation);
+   client->actor.toRotation = (float)packet->rotation;
    BamsToV3F(&pos, &packet->position);
    client->actor.toPosition.x = pos.x;
    client->actor.toPosition.y = pos.y;
@@ -469,7 +469,7 @@ void gameSendFullPlayerAndCameraState(ClientData *data, GameCamera *camera)
    state.id = PACKET_ID_ACTOR_FULL_STATE;
    state.clientId = data->me->clientId;
    state.flags = data->me->actor.flags;
-   state.rotation = FToBams(camera->rotation.y);
+   state.rotation = ((short)camera->rotation.y) % 360;
 
    pos.x = data->me->actor.position.x;
    pos.y = data->me->actor.position.y;

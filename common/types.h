@@ -50,7 +50,7 @@ typedef struct {
    char id;
    unsigned int clientId;
    unsigned int flags;
-   unsigned int rotation;
+   short rotation;
    Vector3B position;
 } PacketActorFullState;
 
