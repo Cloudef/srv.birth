@@ -117,7 +117,7 @@ static void sendFullState(ServerData *data, Client *target, Client *client)
    PacketActorFullState state;
    memset(&state, 0, sizeof(PacketActorFullState));
    state.id = PACKET_ID_ACTOR_FULL_STATE;
-   state.clientId = target->clientId;
+   state.clientId = htonl(target->clientId);
    state.flags = target->actor.flags;
    state.rotation = target->actor.rotation;
    memcpy(&state.position, &target->actor.position, sizeof(Vector3B));
@@ -137,14 +137,14 @@ static void sendJoin(ServerData *data, ENetEvent *event)
    memset(&info, 0, sizeof(PacketClientInformation));
    info.id = PACKET_ID_CLIENT_INFORMATION;
    strncpy(info.host, client.host, sizeof(info.host));
-   info.clientId = event->peer->connectID;
+   info.clientId = htonl(client.clientId);
    for (c = data->clients; c; c = c->next) {
       if (c == event->peer->data) continue;
       PacketClientInformation info2;
       memset(&info2, 0, sizeof(PacketClientInformation));
       info2.id = PACKET_ID_CLIENT_INFORMATION;
       strncpy(info2.host, c->host, sizeof(info2.host));
-      info2.clientId = c->clientId;
+      info2.clientId = htonl(c->clientId);
       serverSend(event->peer->data, (unsigned char*)&info2, sizeof(PacketClientInformation));
       sendFullState(data, c, event->peer->data);
       serverSend(c, (unsigned char*)&info, sizeof(PacketClientInformation));
@@ -162,7 +162,7 @@ static void sendPart(ServerData *data, ENetEvent *event)
    c = (Client*)event->peer->data;
    memset(&part, 0, sizeof(PacketClientPart));
    part.id = PACKET_ID_CLIENT_PART;
-   part.clientId = c->clientId;
+   part.clientId = htonl(c->clientId);
    for (c = data->clients; c; c = c->next) {
       if (c == event->peer->data) continue;
       serverSend(c, (unsigned char*)&part, sizeof(PacketClientPart));
@@ -216,6 +216,9 @@ static int manageEnet(ServerData *data)
 
             /* handle packet */
             packet = (PacketGeneric*)event.packet->data;
+            /* we have no reason to ntohl the clientId here.
+             * server can use the peer->data to find out the client pointer.
+             * this is so we can redirect the packets like they are for echo packets. */
             switch (packet->id) {
                case PACKET_ID_ACTOR_STATE:
                   handleState(data, &event);

@@ -61,6 +61,15 @@ typedef struct ClientData {
    float delta;
 } ClientData;
 
+static inline kmVec3* kmVec3Interpolate(kmVec3* pOut, const kmVec3* pIn, const kmVec3* other, float d)
+{
+   const float inv = 1.0f - d;
+   pOut->x = pIn->x*inv + other->x*d;
+   pOut->y = pIn->y*inv + other->y*d;
+   pOut->z = pIn->z*inv + other->z*d;
+   return pOut;
+}
+
 static int closeCallback(GLFWwindow window)
 {
    RUNNING = 0;
@@ -118,6 +127,8 @@ static void initClientData(ClientData *data)
 static void gameSend(ClientData *data, unsigned char *pdata, size_t size)
 {
    ENetPacket *packet;
+   PacketGeneric *generic = (PacketGeneric*)pdata;
+   generic->clientId = htonl(data->me->clientId);
    packet = enet_packet_create(pdata, size, ENET_PACKET_FLAG_RELIABLE);
    enet_peer_send(data->peer, 0, packet);
 }
@@ -177,6 +188,7 @@ static int initEnet(const char *host_ip, const int host_port, ClientData *data)
    /* store our client id */
    data->me->clientId = data->peer->connectID;
    strncpy(data->me->host, "127.0.0.1", sizeof(data->me->host));
+   printf("My ID is %u\n", data->me->clientId);
 
    return RETURN_OK;
 }
@@ -244,7 +256,7 @@ static void handlePart(ClientData *data, ENetEvent *event)
 
 static void gameActorApplyPacket(ClientData *data, GameActor *actor, PacketActorState *packet)
 {
-   actor->flags = packet->flags;
+   actor->flags = ntohl(packet->flags);
 }
 
 static void handleState(ClientData *data, ENetEvent *event)
@@ -269,7 +281,7 @@ static void handleFullState(ClientData *data, ENetEvent *event)
 
    puts("GOT FULL STATE");
    gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
-   client->actor.toRotation = (float)packet->rotation;
+   client->actor.toRotation = BamsToF(packet->rotation);
    BamsToV3F(&pos, &packet->position);
    client->actor.toPosition.x = pos.x;
    client->actor.toPosition.y = pos.y;
@@ -293,6 +305,7 @@ static int manageEnet(ClientData *data)
 
             /* handle packet */
             packet = (PacketGeneric*)event.packet->data;
+            packet->clientId = ntohl(packet->clientId);
             switch (packet->id) {
                case PACKET_ID_CLIENT_INFORMATION:
                   handleJoin(data, &event);
@@ -315,15 +328,6 @@ static int manageEnet(ClientData *data)
    }
 
    return RETURN_OK;
-}
-
-static inline kmVec3* kmVec3Interpolate(kmVec3* pOut, const kmVec3* pIn, const kmVec3* other, float d)
-{
-   const float inv = 1.0f - d;
-   pOut->x = pIn->x*inv + other->x*d;
-   pOut->y = pIn->y*inv + other->y*d;
-   pOut->z = pIn->z*inv + other->z*d;
-   return pOut;
 }
 
 int gameActorFlagsIsMoving(unsigned int flags)
@@ -397,7 +401,7 @@ void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
 
 void gameActorUpdate(ClientData *data, GameActor *actor)
 {
-   float speed  = actor->speed * data->delta; /* multiply by interpolation */
+   float speed = actor->speed * data->delta; /* multiply by interpolation */
 
    if (actor->shouldInterpolate) {
       float cspeed = data->camera.speed * data->delta; /* camera speed for other players */
@@ -426,7 +430,11 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
    }
 
    if (actor->shouldInterpolate) {
-      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.2f);
+      if (gameActorFlagsIsMoving(actor->flags)) {
+         kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.2f);
+      } else {
+         kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.04f);
+      }
    } else {
       kmVec3Assign(&actor->position, &actor->toPosition);
    }
@@ -456,8 +464,7 @@ void gameSendPlayerAndCameraState(ClientData *data, GameCamera *camera)
    PacketActorState state;
    memset(&state, 0, sizeof(PacketActorState));
    state.id = PACKET_ID_ACTOR_STATE;
-   state.clientId = data->me->clientId;
-   state.flags = data->me->actor.flags;
+   state.flags = htonl(data->me->actor.flags);
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorState));
 }
 
@@ -467,9 +474,8 @@ void gameSendFullPlayerAndCameraState(ClientData *data, GameCamera *camera)
    PacketActorFullState state;
    memset(&state, 0, sizeof(PacketActorFullState));
    state.id = PACKET_ID_ACTOR_FULL_STATE;
-   state.clientId = data->me->clientId;
-   state.flags = data->me->actor.flags;
-   state.rotation = ((short)camera->rotation.y) % 360;
+   state.flags = htonl(data->me->actor.flags);
+   state.rotation = FToBams(camera->rotation.y);
 
    pos.x = data->me->actor.position.x;
    pos.y = data->me->actor.position.y;
@@ -519,7 +525,7 @@ int main(int argc, char **argv)
 
    GameActor *player = &data.me->actor;
    player->object = glhckCubeNew(1);
-   player->speed  = 20;
+   player->speed  = 40;
    glhckObjectColorb(player->object, 255, 0, 0, 255);
 
    glhckObject *ground = glhckPlaneNew(100);
@@ -587,7 +593,7 @@ int main(int argc, char **argv)
 
       Client *c2;
       for (c2 = data.clients; c2; c2 = c2->next) {
-         gameActorUpdate(&data, &c2->actor);
+         if (&c2->actor != player) gameActorUpdate(&data, &c2->actor);
          glhckObjectDraw(c2->actor.object);
       }
 
@@ -605,7 +611,7 @@ int main(int argc, char **argv)
          fullStateTime = now + 5.0f;
          puts("SEND FULL");
       } else if (player->flags != player->lastFlags) {
-         if (!gameActorFlagsIsMoving(player->flags)) {
+         if (gameActorFlagsIsMoving(player->flags) != gameActorFlagsIsMoving(player->lastFlags)) {
             gameSendFullPlayerAndCameraState(&data, camera);
             fullStateTime = now + 5.0f;
             puts("SEND FULL");

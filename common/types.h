@@ -27,12 +27,13 @@ typedef enum PacketId {
 
 typedef struct {
    char id;
+   unsigned int clientId;
 } PacketGeneric;
 
 typedef struct {
    char id;
-   char host[45];
    unsigned int clientId;
+   char host[45];
 } PacketClientInformation;
 
 typedef struct {
@@ -50,7 +51,7 @@ typedef struct {
    char id;
    unsigned int clientId;
    unsigned int flags;
-   short rotation;
+   unsigned int rotation;
    Vector3B position;
 } PacketActorFullState;
 
