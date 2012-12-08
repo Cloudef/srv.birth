@@ -4,12 +4,20 @@
 #include <assert.h>
 #include <enet/enet.h>
 
+#include "../common/bams.h"
 #include "../common/types.h"
+
+typedef struct GameActor {
+   unsigned int flags;
+   unsigned int rotation;
+   Vector3B position;
+} GameActor;
 
 typedef struct Client {
    char host[46];
    unsigned int clientId;
    ENetPeer *peer;
+   GameActor actor;
    struct Client *next;
 } Client;
 
@@ -94,6 +102,28 @@ static int deinitEnet(ServerData *data)
    return RETURN_OK;
 }
 
+#define REDIRECT_PACKET_TO_OTHERS(cast, data, event)        \
+   Client *c;                                               \
+   cast copy;                                               \
+   cast *packet = (cast*)event->packet->data;               \
+   memcpy(&copy, packet, sizeof(cast));                     \
+   for (c = data->clients; c; c = c->next) {                \
+      if (c == event->peer->data) continue;                 \
+      serverSend(c, (unsigned char*)&copy, sizeof(cast));   \
+   }
+
+static void sendFullState(ServerData *data, Client *target, Client *client)
+{
+   PacketActorFullState state;
+   memset(&state, 0, sizeof(PacketActorFullState));
+   state.id = PACKET_ID_ACTOR_FULL_STATE;
+   state.clientId = target->clientId;
+   state.flags = target->actor.flags;
+   state.rotation = target->actor.rotation;
+   memcpy(&state.position, &target->actor.position, sizeof(Vector3B));
+   serverSend(client, (unsigned char*)&state, sizeof(PacketActorFullState));
+}
+
 static void sendJoin(ServerData *data, ENetEvent *event)
 {
    Client client, *c;
@@ -116,6 +146,7 @@ static void sendJoin(ServerData *data, ENetEvent *event)
       strncpy(info2.host, c->host, sizeof(info2.host));
       info2.clientId = c->clientId;
       serverSend(event->peer->data, (unsigned char*)&info2, sizeof(PacketClientInformation));
+      sendFullState(data, c, event->peer->data);
       serverSend(c, (unsigned char*)&info, sizeof(PacketClientInformation));
    }
 
@@ -130,7 +161,7 @@ static void sendPart(ServerData *data, ENetEvent *event)
 
    c = (Client*)event->peer->data;
    memset(&part, 0, sizeof(PacketClientPart));
-   part.id = PACKET_ID_PART;
+   part.id = PACKET_ID_CLIENT_PART;
    part.clientId = c->clientId;
    for (c = data->clients; c; c = c->next) {
       if (c == event->peer->data) continue;
@@ -141,9 +172,29 @@ static void sendPart(ServerData *data, ENetEvent *event)
    printf("%s [%u] disconnected.\n", c->host, c->clientId);
 }
 
+static void handleState(ServerData *data, ENetEvent *event)
+{
+   REDIRECT_PACKET_TO_OTHERS(PacketActorState, data, event);
+   c = (Client*)event->peer->data;
+   c->actor.flags = packet->flags;
+   c->actor.rotation = packet->rotation;
+}
+
+static void handleFullState(ServerData *data, ENetEvent *event)
+{
+   REDIRECT_PACKET_TO_OTHERS(PacketActorFullState, data, event);
+   c = (Client*)event->peer->data;
+   c->actor.flags = packet->flags;
+   c->actor.rotation = packet->rotation;
+   memcpy(&c->actor.position, &packet->position, sizeof(Vector3B));
+}
+
+#undef REDIRECT_PACKET_TO_OTHERS
+
 static int manageEnet(ServerData *data)
 {
    ENetEvent event;
+   PacketGeneric *packet;
    assert(data);
 
    /* Wait up to 1000 milliseconds for an event. */
@@ -156,7 +207,6 @@ static int manageEnet(ServerData *data)
 
             /* broadcast join message to others */
             sendJoin(data, &event);
-            enet_host_flush(data->server);
             break;
 
          case ENET_EVENT_TYPE_RECEIVE:
@@ -165,6 +215,17 @@ static int manageEnet(ServerData *data)
                   event.packet->data,
                   event.channelID);
 
+            /* handle packet */
+            packet = (PacketGeneric*)event.packet->data;
+            switch (packet->id) {
+               case PACKET_ID_ACTOR_STATE:
+                  handleState(data, &event);
+                  break;
+               case PACKET_ID_ACTOR_FULL_STATE:
+                  handleFullState(data, &event);
+                  break;
+            }
+
             /* Clean up the packet now that we're done using it. */
             enet_packet_destroy(event.packet);
             break;
@@ -172,7 +233,6 @@ static int manageEnet(ServerData *data)
          case ENET_EVENT_TYPE_DISCONNECT:
             /* broadcast part message to others */
             sendPart(data, &event);
-            enet_host_flush(data->server);
 
             /* Reset the peer's client information. */
             serverFreeClient(data, event.peer->data);
@@ -180,6 +240,8 @@ static int manageEnet(ServerData *data)
       }
    }
 
+   /* send all response packets */
+   enet_host_flush(data->server);
    return RETURN_OK;
 }
 

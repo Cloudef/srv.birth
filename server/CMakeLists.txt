@@ -1,5 +1,6 @@
 SET(SERVER_SRC
-   src/main.c)
+   src/main.c
+   ../common/bams.c)
 INCLUDE_DIRECTORIES(
   ${kazmath_SOURCE_DIR}/src
   ${srv.birth_SOURCE_DIR}/common

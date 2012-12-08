@@ -1,5 +1,6 @@
 SET(CLIENT_SRC
-    src/main.c)
+    src/main.c
+    ../common/bams.c)
  INCLUDE_DIRECTORIES(
   ${kazmath_SOURCE_DIR}/src
   ${glhck_SOURCE_DIR}/include

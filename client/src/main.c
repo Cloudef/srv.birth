@@ -6,6 +6,7 @@
 #include <GL/glfw3.h>
 #include <glhck/glhck.h>
 
+#include "bams.h"
 #include "types.h"
 
 static int RUNNING = 0;
@@ -22,19 +23,14 @@ enum {
    CAMERA_SLIDE      = 64,
 };
 
-enum {
-   ACTOR_NONE        = 0,
-   ACTOR_FORWARD     = 1,
-   ACTOR_BACKWARD    = 2,
-   ACTOR_LEFT        = 4,
-   ACTOR_RIGHT       = 8,
-};
-
 typedef struct GameActor {
    glhckObject *object;
    kmVec3 rotation;
    kmVec3 position;
    float speed;
+   float toRotation;
+   kmVec3 toPosition;
+   char shouldInterpolate;
    unsigned int flags, lastFlags;
 } GameActor;
 
@@ -116,6 +112,13 @@ static void initClientData(ClientData *data)
    memset(data, 0, sizeof(ClientData));
    memset(&client, 0, sizeof(Client));
    data->me = gameNewClient(data, &client);
+}
+
+static void gameSend(ClientData *data, unsigned char *pdata, size_t size)
+{
+   ENetPacket *packet;
+   packet = enet_packet_create(pdata, size, ENET_PACKET_FLAG_RELIABLE);
+   enet_peer_send(data->peer, 0, packet);
 }
 
 static int initEnet(const char *host_ip, const int host_port, ClientData *data)
@@ -211,13 +214,14 @@ static int deinitEnet(ClientData *data)
 static void handleJoin(ClientData *data, ENetEvent *event)
 {
    Client client;
-   PacketClientInformation *join = (PacketClientInformation*)event->packet->data;
+   PacketClientInformation *packet = (PacketClientInformation*)event->packet->data;
 
    memset(&client, 0, sizeof(Client));
    client.actor.object = glhckCubeNew(1);
-   client.actor.speed  = 1;
-   strncpy(client.host, join->host, sizeof(client.host));
-   client.clientId = join->clientId;
+   client.actor.speed  = 40;
+   client.actor.shouldInterpolate = 1;
+   strncpy(client.host, packet->host, sizeof(client.host));
+   client.clientId = packet->clientId;
    glhckObjectColorb(client.actor.object, 0, 255, 0, 255);
    gameNewClient(data, &client);
    printf("Client [%u] (%s) joined!\n", client.clientId, client.host);
@@ -226,15 +230,49 @@ static void handleJoin(ClientData *data, ENetEvent *event)
 static void handlePart(ClientData *data, ENetEvent *event)
 {
    Client *client;
-   PacketClientPart *part = (PacketClientPart*)event->packet->data;
+   PacketClientPart *packet = (PacketClientPart*)event->packet->data;
 
-   if (!(client = clientForId(data, part->clientId)))
+   if (!(client = clientForId(data, packet->clientId)))
       return;
 
    printf("Client [%u] (%s) parted!\n", client->clientId, client->host);
    glhckObjectFree(client->actor.object);
    gameFreeClient(data, client);
    event->peer->data = NULL;
+}
+
+static void gameActorApplyPacket(ClientData *data, GameActor *actor, PacketActorState *packet)
+{
+   actor->flags = packet->flags;
+   actor->toRotation = BamsToF(packet->rotation);
+}
+
+static void handleState(ClientData *data, ENetEvent *event)
+{
+   Client *client;
+   PacketActorState *packet = (PacketActorState*)event->packet->data;
+
+   if (!(client = clientForId(data, packet->clientId)))
+      return;
+
+   gameActorApplyPacket(data, &client->actor, packet);
+}
+
+static void handleFullState(ClientData *data, ENetEvent *event)
+{
+   Client *client;
+   Vector3f pos;
+   PacketActorFullState *packet = (PacketActorFullState*)event->packet->data;
+
+   if (!(client = clientForId(data, packet->clientId)))
+      return;
+
+   puts("FULL ASTATE");
+   gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
+   BamsToV3F(&pos, &packet->position);
+   client->actor.toPosition.x = pos.x;
+   client->actor.toPosition.y = pos.y;
+   client->actor.toPosition.z = pos.z;
 }
 
 static int manageEnet(ClientData *data)
@@ -258,8 +296,14 @@ static int manageEnet(ClientData *data)
                case PACKET_ID_CLIENT_INFORMATION:
                   handleJoin(data, &event);
                   break;
-               case PACKET_ID_PART:
+               case PACKET_ID_CLIENT_PART:
                   handlePart(data, &event);
+                  break;
+               case PACKET_ID_ACTOR_STATE:
+                  handleState(data, &event);
+                  break;
+               case PACKET_ID_ACTOR_FULL_STATE:
+                  handleFullState(data, &event);
                   break;
             }
 
@@ -347,10 +391,38 @@ void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
    glhckObjectPosition(internalObject, &camera->position);
 }
 
-void gameActorUpdateFrom3rdPersonCamera(ClientData *data, GameActor *actor, GameCamera *camera)
+void gameActorUpdate(ClientData *data, GameActor *actor)
 {
    float speed = actor->speed * data->delta; /* multiply by interpolation */
 
+   if (actor->flags & ACTOR_FORWARD) {
+      actor->toPosition.x -= speed * cos(kmDegreesToRadians(actor->toRotation + 90));
+      actor->toPosition.z += speed * sin(kmDegreesToRadians(actor->toRotation + 90));
+
+      kmVec3 targetRotation = {0.0f,actor->toRotation,0.0f};
+      kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, 0.18f);
+   }
+
+   if (actor->flags & ACTOR_BACKWARD) {
+      actor->toPosition.x += speed * cos(kmDegreesToRadians(actor->toRotation + 90));
+      actor->toPosition.z -= speed * sin(kmDegreesToRadians(actor->toRotation + 90));
+
+      kmVec3 targetRotation = {0.0f,actor->toRotation + 180,0.0f};
+      kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, 0.18f);
+   }
+
+   if (actor->shouldInterpolate) {
+      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.18f);
+   } else {
+      kmVec3Assign(&actor->position, &actor->toPosition);
+   }
+
+   glhckObjectRotation(actor->object, &actor->rotation);
+   glhckObjectPosition(actor->object, &actor->position);
+}
+
+void gameActorUpdateFrom3rdPersonCamera(ClientData *data, GameActor *actor, GameCamera *camera)
+{
    if (gameActorFlagsIsMoving(actor->flags) != gameActorFlagsIsMoving(actor->lastFlags)) {
       if (!gameActorFlagsIsMoving(actor->flags)) {
          camera->flags |= CAMERA_SLIDE;
@@ -361,24 +433,36 @@ void gameActorUpdateFrom3rdPersonCamera(ClientData *data, GameActor *actor, Game
       }
    }
 
-   if (actor->flags & ACTOR_FORWARD) {
-      actor->position.x -= speed * cos(kmDegreesToRadians(camera->rotation.y + 90));
-      actor->position.z += speed * sin(kmDegreesToRadians(camera->rotation.y + 90));
+   actor->toRotation = camera->rotation.y;
+   gameActorUpdate(data, actor);
+}
 
-      kmVec3 targetRotation = {0.0f,camera->rotation.y,0.0f};
-      kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, 0.18f);
-   }
+void gameSendPlayerAndCameraState(ClientData *data, GameCamera *camera)
+{
+   PacketActorState state;
+   memset(&state, 0, sizeof(PacketActorState));
+   state.id = PACKET_ID_ACTOR_STATE;
+   state.clientId = data->me->clientId;
+   state.flags = data->me->actor.flags;
+   state.rotation = FToBams(camera->rotation.y);
+   gameSend(data, (unsigned char*)&state, sizeof(PacketActorState));
+}
 
-   if (actor->flags & ACTOR_BACKWARD) {
-      actor->position.x += speed * cos(kmDegreesToRadians(camera->rotation.y + 90));
-      actor->position.z -= speed * sin(kmDegreesToRadians(camera->rotation.y + 90));
+void gameSendFullPlayerAndCameraState(ClientData *data, GameCamera *camera)
+{
+   Vector3f pos;
+   PacketActorFullState state;
+   memset(&state, 0, sizeof(PacketActorFullState));
+   state.id = PACKET_ID_ACTOR_FULL_STATE;
+   state.clientId = data->me->clientId;
+   state.flags = data->me->actor.flags;
+   state.rotation = FToBams(camera->rotation.y);
 
-      kmVec3 targetRotation = {0.0f,camera->rotation.y + 180,0.0f};
-      kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, 0.18f);
-   }
-
-   glhckObjectRotation(actor->object, &actor->rotation);
-   glhckObjectPosition(actor->object, &actor->position);
+   pos.x = data->me->actor.position.x;
+   pos.y = data->me->actor.position.y;
+   pos.z = data->me->actor.position.z;
+   V3FToBams(&state.position, &pos);
+   gameSend(data, (unsigned char*)&state, sizeof(PacketActorFullState));
 }
 
 int main(int argc, char **argv)
@@ -440,12 +524,14 @@ int main(int argc, char **argv)
    }
 
    RUNNING = 1;
+   float fullStateTime = glfwGetTime() + 5.0f;
    while (RUNNING && glfwGetKey(window, GLFW_KEY_ESCAPE) != GLFW_PRESS) {
       last       = now;
       now        = glfwGetTime();
       data.delta = now - last;
       glfwPollEvents();
 
+      float lastRotation = camera.rotation.y;
       camera.lastFlags = camera.flags;
       camera.flags = CAMERA_NONE;
       if (camera.lastFlags & CAMERA_SLIDE) camera.flags |= CAMERA_SLIDE;
@@ -491,6 +577,7 @@ int main(int argc, char **argv)
 
       Client *c2;
       for (c2 = data.clients; c2; c2 = c2->next) {
+         gameActorUpdate(&data, &c2->actor);
          glhckObjectDraw(c2->actor.object);
       }
 
@@ -501,7 +588,22 @@ int main(int argc, char **argv)
       glhckRender();
       glfwSwapBuffers(window);
       glhckClear();
+
       manageEnet(&data);
+      if (fullStateTime < now) {
+         gameSendFullPlayerAndCameraState(&data, &camera);
+         fullStateTime = now + 5.0f;
+         puts("SEND FULL");
+      } else if (player->flags != player->lastFlags || lastRotation != camera.rotation.y) {
+         if (!gameActorFlagsIsMoving(player->flags)) {
+            gameSendFullPlayerAndCameraState(&data, &camera);
+            fullStateTime = now + 5.0f;
+            puts("SEND FULL");
+         } else {
+            gameSendPlayerAndCameraState(&data, &camera);
+         }
+      }
+      enet_host_flush(data.client);
 
       if (fpsDelay < now) {
          if (duration > 0.0f) {
