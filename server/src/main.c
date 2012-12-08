@@ -177,7 +177,6 @@ static void handleState(ServerData *data, ENetEvent *event)
    REDIRECT_PACKET_TO_OTHERS(PacketActorState, data, event);
    c = (Client*)event->peer->data;
    c->actor.flags = packet->flags;
-   c->actor.rotation = packet->rotation;
 }
 
 static void handleFullState(ServerData *data, ENetEvent *event)

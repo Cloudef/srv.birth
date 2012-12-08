@@ -56,6 +56,7 @@ typedef struct ClientData {
    ENetHost *client;
    ENetPeer *peer;
    Client *me;
+   GameCamera camera;
    Client *clients;
    float delta;
 } ClientData;
@@ -244,7 +245,6 @@ static void handlePart(ClientData *data, ENetEvent *event)
 static void gameActorApplyPacket(ClientData *data, GameActor *actor, PacketActorState *packet)
 {
    actor->flags = packet->flags;
-   actor->toRotation = BamsToF(packet->rotation);
 }
 
 static void handleState(ClientData *data, ENetEvent *event)
@@ -267,8 +267,9 @@ static void handleFullState(ClientData *data, ENetEvent *event)
    if (!(client = clientForId(data, packet->clientId)))
       return;
 
-   puts("FULL ASTATE");
+   puts("GOT FULL STATE");
    gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
+   client->actor.toRotation = BamsToF(packet->rotation);
    BamsToV3F(&pos, &packet->position);
    client->actor.toPosition.x = pos.x;
    client->actor.toPosition.y = pos.y;
@@ -347,17 +348,21 @@ void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
 
    if (camera->flags & CAMERA_RIGHT) {
       camera->rotation.y -= speed*2;
+      target->flags |= ACTOR_RIGHT;
    }
    if (camera->flags & CAMERA_LEFT) {
       camera->rotation.y += speed*2;
+      target->flags |= ACTOR_LEFT;
    }
 
    if (!gameActorFlagsIsMoving(target->flags)) {
       if (camera->flags & CAMERA_TURN_RIGHT) {
          camera->rotation.y -= speed*2;
+         target->flags |= ACTOR_RIGHT;
       }
       if (camera->flags & CAMERA_TURN_LEFT) {
          camera->rotation.y += speed*2;
+         target->flags |= ACTOR_LEFT;
       }
    } else {
       if (camera->flags & CAMERA_TURN_RIGHT) {
@@ -383,7 +388,6 @@ void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
    if (camera->rotation.x > 30) camera->rotation.x = 30;
    if (camera->rotation.x < 0) camera->rotation.x  = 0;
 
-
    glhckObject *internalObject = glhckCameraGetObject(camera->object);
    kmVec3 targetPosition = target->position;
    kmVec3Add(&targetPosition, &targetPosition, &camera->offset);
@@ -393,7 +397,17 @@ void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
 
 void gameActorUpdate(ClientData *data, GameActor *actor)
 {
-   float speed = actor->speed * data->delta; /* multiply by interpolation */
+   float speed  = actor->speed * data->delta; /* multiply by interpolation */
+
+   if (actor->shouldInterpolate) {
+      float cspeed = data->camera.speed * data->delta; /* camera speed for other players */
+      if (actor->flags & ACTOR_LEFT) {
+         actor->toRotation += cspeed*2;
+      }
+      if (actor->flags & ACTOR_RIGHT) {
+         actor->toRotation -= cspeed*2;
+      }
+   }
 
    if (actor->flags & ACTOR_FORWARD) {
       actor->toPosition.x -= speed * cos(kmDegreesToRadians(actor->toRotation + 90));
@@ -412,7 +426,7 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
    }
 
    if (actor->shouldInterpolate) {
-      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.18f);
+      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.2f);
    } else {
       kmVec3Assign(&actor->position, &actor->toPosition);
    }
@@ -444,7 +458,6 @@ void gameSendPlayerAndCameraState(ClientData *data, GameCamera *camera)
    state.id = PACKET_ID_ACTOR_STATE;
    state.clientId = data->me->clientId;
    state.flags = data->me->actor.flags;
-   state.rotation = FToBams(camera->rotation.y);
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorState));
 }
 
@@ -496,14 +509,13 @@ int main(int argc, char **argv)
    if (initEnet("localhost", 1234, &data) != RETURN_OK)
       return EXIT_FAILURE;
 
-   GameCamera camera;
-   memset(&camera, 0, sizeof(GameCamera));
-   camera.object = glhckCameraNew();
-   camera.radius = 30;
-   camera.speed  = 60;
-   camera.rotation.x = 10.0f;
-   kmVec3Fill(&camera.offset, 0.0f, 5.0f, 0.0f);
-   glhckCameraRange(camera.object, 1.0f, 500.0f);
+   GameCamera *camera = &data.camera;
+   camera->object = glhckCameraNew();
+   camera->radius = 30;
+   camera->speed  = 60;
+   camera->rotation.x = 10.0f;
+   kmVec3Fill(&camera->offset, 0.0f, 5.0f, 0.0f);
+   glhckCameraRange(camera->object, 1.0f, 500.0f);
 
    GameActor *player = &data.me->actor;
    player->object = glhckCubeNew(1);
@@ -531,35 +543,33 @@ int main(int argc, char **argv)
       data.delta = now - last;
       glfwPollEvents();
 
-      float lastRotation = camera.rotation.y;
-      camera.lastFlags = camera.flags;
-      camera.flags = CAMERA_NONE;
-      if (camera.lastFlags & CAMERA_SLIDE) camera.flags |= CAMERA_SLIDE;
-
-      if (glfwGetKey(window, GLFW_KEY_UP)) {
-         camera.flags |= CAMERA_UP;
-      }
-      if (glfwGetKey(window, GLFW_KEY_DOWN)) {
-         camera.flags |= CAMERA_DOWN;
-      }
-      if (glfwGetKey(window, GLFW_KEY_RIGHT)) {
-         camera.flags |= CAMERA_TURN_RIGHT;
-      }
-      if (glfwGetKey(window, GLFW_KEY_LEFT)) {
-         camera.flags |= CAMERA_TURN_LEFT;
-      }
-      if (glfwGetKey(window, GLFW_KEY_E)) {
-         camera.flags |= CAMERA_SLIDE;
-      }
-      if (glfwGetKey(window, GLFW_KEY_D)) {
-         camera.flags |= CAMERA_RIGHT;
-      }
-      if (glfwGetKey(window, GLFW_KEY_A)) {
-         camera.flags |= CAMERA_LEFT;
-      }
-
+      camera->lastFlags = camera->flags;
+      camera->flags = CAMERA_NONE;
+      if (camera->lastFlags & CAMERA_SLIDE) camera->flags |= CAMERA_SLIDE;
       player->lastFlags = player->flags;
       player->flags = ACTOR_NONE;
+
+      if (glfwGetKey(window, GLFW_KEY_UP)) {
+         camera->flags |= CAMERA_UP;
+      }
+      if (glfwGetKey(window, GLFW_KEY_DOWN)) {
+         camera->flags |= CAMERA_DOWN;
+      }
+      if (glfwGetKey(window, GLFW_KEY_RIGHT)) {
+         camera->flags |= CAMERA_TURN_RIGHT;
+      }
+      if (glfwGetKey(window, GLFW_KEY_LEFT)) {
+         camera->flags |= CAMERA_TURN_LEFT;
+      }
+      if (glfwGetKey(window, GLFW_KEY_E)) {
+         camera->flags |= CAMERA_SLIDE;
+      }
+      if (glfwGetKey(window, GLFW_KEY_D)) {
+         camera->flags |= CAMERA_RIGHT;
+      }
+      if (glfwGetKey(window, GLFW_KEY_A)) {
+         camera->flags |= CAMERA_LEFT;
+      }
 
       if (glfwGetKey(window, GLFW_KEY_W)) {
          player->flags |= ACTOR_FORWARD;
@@ -568,10 +578,10 @@ int main(int argc, char **argv)
          player->flags |= ACTOR_BACKWARD;
       }
 
-      gameCameraUpdate(&data, &camera, player);
-      gameActorUpdateFrom3rdPersonCamera(&data, player, &camera);
+      gameCameraUpdate(&data, camera, player);
+      gameActorUpdateFrom3rdPersonCamera(&data, player, camera);
 
-      glhckCameraUpdate(camera.object);
+      glhckCameraUpdate(camera->object);
       glhckObjectDraw(ground);
       glhckObjectDraw(player->object);
 
@@ -590,17 +600,17 @@ int main(int argc, char **argv)
       glhckClear();
 
       manageEnet(&data);
-      if (fullStateTime < now) {
-         gameSendFullPlayerAndCameraState(&data, &camera);
+      if (gameActorFlagsIsMoving(player->flags) && fullStateTime < now) {
+         gameSendFullPlayerAndCameraState(&data, camera);
          fullStateTime = now + 5.0f;
          puts("SEND FULL");
-      } else if (player->flags != player->lastFlags || lastRotation != camera.rotation.y) {
+      } else if (player->flags != player->lastFlags) {
          if (!gameActorFlagsIsMoving(player->flags)) {
-            gameSendFullPlayerAndCameraState(&data, &camera);
+            gameSendFullPlayerAndCameraState(&data, camera);
             fullStateTime = now + 5.0f;
             puts("SEND FULL");
          } else {
-            gameSendPlayerAndCameraState(&data, &camera);
+            gameSendPlayerAndCameraState(&data, camera);
          }
       }
       enet_host_flush(data.client);

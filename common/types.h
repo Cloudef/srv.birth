@@ -44,7 +44,6 @@ typedef struct {
    char id;
    unsigned int clientId;
    unsigned int flags;
-   unsigned int rotation;
 } PacketActorState;
 
 typedef struct {
