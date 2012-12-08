@@ -1,11 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <assert.h>
 #include <enet/enet.h>
 #include <GL/glfw3.h>
 #include <glhck/glhck.h>
 
 #include "types.h"
+
+static int RUNNING = 0;
+static int WIDTH = 800, HEIGHT = 480;
 
 enum {
    CAMERA_NONE       = 0,
@@ -45,45 +49,80 @@ typedef struct GameCamera {
    unsigned int flags, lastFlags;
 } GameCamera;
 
-kmVec3* kmVec3Interpolate(kmVec3* pOut, const kmVec3* pIn, const kmVec3* other, float d)
-{
-   const float inv = 1.0f - d;
-   pOut->x = other->x*inv + pIn->x*d;
-   pOut->y = other->y*inv + pIn->y*d;
-   pOut->z = other->z*inv + pIn->z*d;
-   return pOut;
-}
+typedef struct Client {
+   GameActor actor;
+   char host[45];
+   unsigned int clientId;
+   struct Client *next;
+} Client;
 
-static int RUNNING = 0;
-static int WIDTH = 800, HEIGHT = 480;
-int close_callback(GLFWwindow window)
+typedef struct ClientData {
+   ENetHost *client;
+   ENetPeer *peer;
+   Client *me;
+   Client *clients;
+   float delta;
+} ClientData;
+
+static int closeCallback(GLFWwindow window)
 {
    RUNNING = 0;
    return 1;
 }
 
-void resize_callback(GLFWwindow window, int width, int height)
+static void resizeCallback(GLFWwindow window, int width, int height)
 {
    WIDTH = width; HEIGHT = height;
    glhckDisplayResize(width, height);
 }
 
-typedef struct client_data {
-   ENetHost *client;
-   ENetPeer *peer;
-} client_data;
-
-static void init_data(client_data *data)
+static Client* gameNewClient(ClientData *data, Client *params)
 {
-   assert(data);
-   data->client = NULL;
+   Client *c;
+
+   /* add to list */
+   for (c = data->clients; c && c->next; c = c->next);
+   if (c) c = c->next = malloc(sizeof(Client));
+   else c = data->clients = malloc(sizeof(Client));
+
+   memcpy(c, params, sizeof(Client));
+   return c;
 }
 
-static int init_enet(const char *host_ip, const int host_port, client_data *data)
+static void gameFreeClient(ClientData *data, Client *client)
+{
+   Client *c;
+
+   /* remove from list */
+   for (c = data->clients; c != client && c->next != client; c = c->next);
+   if (c == client) data->clients = client->next;
+   else if (c) c->next = client->next;
+
+   free(client);
+}
+
+static Client* clientForId(ClientData *data, unsigned int id)
+{
+   Client *c;
+   for (c = data->clients; c && c->clientId != id; c = c->next);
+   printf("%s %u\n", c?"Found id":"Did not found id", id);
+   return c;
+}
+
+static void initClientData(ClientData *data)
+{
+   Client client;
+   assert(data);
+   memset(data, 0, sizeof(ClientData));
+   memset(&client, 0, sizeof(Client));
+   data->me = gameNewClient(data, &client);
+}
+
+static int initEnet(const char *host_ip, const int host_port, ClientData *data)
 {
    ENetAddress address;
    ENetEvent event;
-   assert(host_ip && data);
+   assert(host_ip && data && data->me);
 
    if (enet_initialize() != 0) {
       fprintf (stderr, "An error occurred while initializing ENet.\n");
@@ -131,14 +170,17 @@ static int init_enet(const char *host_ip, const int host_port, client_data *data
       return RETURN_FAIL;
    }
 
+   /* store our client id */
+   data->me->clientId = data->peer->connectID;
+   strncpy(data->me->host, "127.0.0.1", sizeof(data->me->host));
+
    return RETURN_OK;
 }
 
-static void disconnect_enet(client_data *data)
+static void disconnectEnet(ClientData *data)
 {
    ENetEvent event;
    assert(data);
-
    enet_peer_disconnect(data->peer, 0);
 
    while (enet_host_service(data->client, &event, 3000) > 0) {
@@ -158,42 +200,85 @@ static void disconnect_enet(client_data *data)
    enet_peer_reset(data->peer);
 }
 
-static int deinit_enet(client_data *data)
+static int deinitEnet(ClientData *data)
 {
    assert(data);
-   disconnect_enet(data);
+   disconnectEnet(data);
    enet_host_destroy(data->client);
    return RETURN_OK;
 }
 
-static int manage_enet(client_data *data)
+static void handleJoin(ClientData *data, ENetEvent *event)
+{
+   Client client;
+   PacketClientInformation *join = (PacketClientInformation*)event->packet->data;
+
+   memset(&client, 0, sizeof(Client));
+   client.actor.object = glhckCubeNew(1);
+   client.actor.speed  = 1;
+   strncpy(client.host, join->host, sizeof(client.host));
+   client.clientId = join->clientId;
+   glhckObjectColorb(client.actor.object, 0, 255, 0, 255);
+   gameNewClient(data, &client);
+   printf("Client [%u] (%s) joined!\n", client.clientId, client.host);
+}
+
+static void handlePart(ClientData *data, ENetEvent *event)
+{
+   Client *client;
+   PacketClientPart *part = (PacketClientPart*)event->packet->data;
+
+   if (!(client = clientForId(data, part->clientId)))
+      return;
+
+   printf("Client [%u] (%s) parted!\n", client->clientId, client->host);
+   glhckObjectFree(client->actor.object);
+   gameFreeClient(data, client);
+   event->peer->data = NULL;
+}
+
+static int manageEnet(ClientData *data)
 {
    ENetEvent event;
+   PacketGeneric *packet;
    assert(data);
 
    /* Wait up to 1000 milliseconds for an event. */
    while (enet_host_service(data->client, &event, 0) > 0) {
       switch (event.type) {
          case ENET_EVENT_TYPE_RECEIVE:
-            printf("A packet of length %u containing %s was received from %s on channel %u.\n",
+            printf("A packet of length %u containing %s was received on channel %u.\n",
                   event.packet->dataLength,
                   event.packet->data,
-                  event.peer->data,
                   event.channelID);
+
+            /* handle packet */
+            packet = (PacketGeneric*)event.packet->data;
+            switch (packet->id) {
+               case PACKET_ID_CLIENT_INFORMATION:
+                  handleJoin(data, &event);
+                  break;
+               case PACKET_ID_PART:
+                  handlePart(data, &event);
+                  break;
+            }
 
             /* Clean up the packet now that we're done using it. */
             enet_packet_destroy(event.packet);
             break;
-
-         case ENET_EVENT_TYPE_DISCONNECT:
-            printf("%s disconected.\n", event.peer->data);
-
-            /* Reset the peer's client information. */
-            event.peer->data = NULL;
       }
    }
 
    return RETURN_OK;
+}
+
+static inline kmVec3* kmVec3Interpolate(kmVec3* pOut, const kmVec3* pIn, const kmVec3* other, float d)
+{
+   const float inv = 1.0f - d;
+   pOut->x = pIn->x*inv + other->x*d;
+   pOut->y = pIn->y*inv + other->y*d;
+   pOut->z = pIn->z*inv + other->z*d;
+   return pOut;
 }
 
 int gameActorFlagsIsMoving(unsigned int flags)
@@ -201,9 +286,9 @@ int gameActorFlagsIsMoving(unsigned int flags)
    return (flags & ACTOR_FORWARD || flags & ACTOR_BACKWARD);
 }
 
-void gameCameraUpdate(GameCamera *camera, GameActor *target)
+void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
 {
-   float speed = camera->speed * 1.0f; /* multiply by interpolation */
+   float speed = camera->speed * data->delta; /* multiply by interpolation */
    kmVec3Assign(&camera->position, &target->position);
    camera->rotation.z = target->rotation.z;
 
@@ -217,27 +302,27 @@ void gameCameraUpdate(GameCamera *camera, GameActor *target)
    }
 
    if (camera->flags & CAMERA_RIGHT) {
-      camera->rotation.y -= speed;
+      camera->rotation.y -= speed*2;
    }
    if (camera->flags & CAMERA_LEFT) {
-      camera->rotation.y += speed;
+      camera->rotation.y += speed*2;
    }
 
    if (!gameActorFlagsIsMoving(target->flags)) {
       if (camera->flags & CAMERA_TURN_RIGHT) {
-         camera->rotation.y -= speed;
+         camera->rotation.y -= speed*2;
       }
       if (camera->flags & CAMERA_TURN_LEFT) {
-         camera->rotation.y += speed;
+         camera->rotation.y += speed*2;
       }
    } else {
       if (camera->flags & CAMERA_TURN_RIGHT) {
-         camera->addRotation.y -= speed;
+         camera->addRotation.y -= speed*2;
          camera->flags &= ~CAMERA_SLIDE;
       }
 
       if (camera->flags & CAMERA_TURN_LEFT) {
-         camera->addRotation.y += speed;
+         camera->addRotation.y += speed*2;
          camera->flags &= ~CAMERA_SLIDE;
       }
    }
@@ -262,9 +347,9 @@ void gameCameraUpdate(GameCamera *camera, GameActor *target)
    glhckObjectPosition(internalObject, &camera->position);
 }
 
-void gameActorUpdateFrom3rdPersonCamera(GameActor *actor, GameCamera *camera)
+void gameActorUpdateFrom3rdPersonCamera(ClientData *data, GameActor *actor, GameCamera *camera)
 {
-   float speed = actor->speed * 1.0f; /* multiply by interpolation */
+   float speed = actor->speed * data->delta; /* multiply by interpolation */
 
    if (gameActorFlagsIsMoving(actor->flags) != gameActorFlagsIsMoving(actor->lastFlags)) {
       if (!gameActorFlagsIsMoving(actor->flags)) {
@@ -299,9 +384,15 @@ void gameActorUpdateFrom3rdPersonCamera(GameActor *actor, GameCamera *camera)
 int main(int argc, char **argv)
 {
    /* global data */
-   client_data data;
+   ClientData data;
    GLFWwindow window;
-   init_data(&data);
+   float          now          = 0;
+   float          last         = 0;
+   unsigned int   frameCounter = 0;
+   unsigned int   FPS          = 0;
+   unsigned int   fpsDelay     = 0;
+   float          duration     = 0;
+   initClientData(&data);
 
    if (!glfwInit())
       return EXIT_FAILURE;
@@ -318,23 +409,22 @@ int main(int argc, char **argv)
    if (!glhckDisplayCreate(WIDTH, HEIGHT, 0))
       return EXIT_FAILURE;
 
-   // if (init_enet("localhost", 1234, &data) != RETURN_OK)
-   //    return EXIT_FAILURE;
+   if (initEnet("localhost", 1234, &data) != RETURN_OK)
+      return EXIT_FAILURE;
 
    GameCamera camera;
    memset(&camera, 0, sizeof(GameCamera));
    camera.object = glhckCameraNew();
    camera.radius = 30;
-   camera.speed  = 3;
+   camera.speed  = 60;
    camera.rotation.x = 10.0f;
    kmVec3Fill(&camera.offset, 0.0f, 5.0f, 0.0f);
    glhckCameraRange(camera.object, 1.0f, 500.0f);
 
-   GameActor player;
-   memset(&player, 0, sizeof(GameActor));
-   player.object = glhckCubeNew(1);
-   player.speed  = 1;
-   glhckObjectColorb(player.object, 255, 0, 0, 255);
+   GameActor *player = &data.me->actor;
+   player->object = glhckCubeNew(1);
+   player->speed  = 20;
+   glhckObjectColorb(player->object, 255, 0, 0, 255);
 
    glhckObject *ground = glhckPlaneNew(100);
    glhckObjectRotatef(ground, 90.0f, 0.0f, 0.0f);
@@ -351,7 +441,9 @@ int main(int argc, char **argv)
 
    RUNNING = 1;
    while (RUNNING && glfwGetKey(window, GLFW_KEY_ESCAPE) != GLFW_PRESS) {
-      // manage_enet(&data);
+      last       = now;
+      now        = glfwGetTime();
+      data.delta = now - last;
       glfwPollEvents();
 
       camera.lastFlags = camera.flags;
@@ -380,22 +472,27 @@ int main(int argc, char **argv)
          camera.flags |= CAMERA_LEFT;
       }
 
-      player.lastFlags = player.flags;
-      player.flags = ACTOR_NONE;
+      player->lastFlags = player->flags;
+      player->flags = ACTOR_NONE;
 
       if (glfwGetKey(window, GLFW_KEY_W)) {
-         player.flags |= ACTOR_FORWARD;
+         player->flags |= ACTOR_FORWARD;
       }
       if (glfwGetKey(window, GLFW_KEY_S)) {
-         player.flags |= ACTOR_BACKWARD;
+         player->flags |= ACTOR_BACKWARD;
       }
 
-      gameCameraUpdate(&camera, &player);
-      gameActorUpdateFrom3rdPersonCamera(&player, &camera);
+      gameCameraUpdate(&data, &camera, player);
+      gameActorUpdateFrom3rdPersonCamera(&data, player, &camera);
 
       glhckCameraUpdate(camera.object);
       glhckObjectDraw(ground);
-      glhckObjectDraw(player.object);
+      glhckObjectDraw(player->object);
+
+      Client *c2;
+      for (c2 = data.clients; c2; c2 = c2->next) {
+         glhckObjectDraw(c2->actor.object);
+      }
 
       for (i = 0; i != c; ++i) {
          glhckObjectDraw(cubes[i]);
@@ -404,9 +501,20 @@ int main(int argc, char **argv)
       glhckRender();
       glfwSwapBuffers(window);
       glhckClear();
+      manageEnet(&data);
+
+      if (fpsDelay < now) {
+         if (duration > 0.0f) {
+            FPS = (float)frameCounter / duration;
+            frameCounter = 0; fpsDelay = now + 1; duration = 0;
+         }
+      }
+
+      ++frameCounter;
+      duration += data.delta;
    }
 
-   // deinit_enet(&data);
+   deinitEnet(&data);
    glhckTerminate();
    glfwTerminate();
    return EXIT_SUCCESS;
