@@ -472,28 +472,28 @@ void gameActorUpdateFrom3rdPersonCamera(ClientData *data, GameActor *actor, Game
       }
    }
 
-   actor->toRotation = camera->rotation.y;
+   actor->toRotation = roundf(camera->rotation.y);
    gameActorUpdate(data, actor);
 }
 
-void gameSendPlayerAndCameraState(ClientData *data, GameCamera *camera)
+void gameSendPlayerState(ClientData *data)
 {
    PacketActorState state;
    memset(&state, 0, sizeof(PacketActorState));
    state.id = PACKET_ID_ACTOR_STATE;
    state.flags = htonl(data->me->actor.flags);
-   state.rotation = FToBams(camera->rotation.y);
+   state.rotation = FToBams(roundf(data->me->actor.toRotation));
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorState));
 }
 
-void gameSendFullPlayerAndCameraState(ClientData *data, GameCamera *camera)
+void gameSendFullPlayerState(ClientData *data)
 {
    Vector3f pos;
    PacketActorFullState state;
    memset(&state, 0, sizeof(PacketActorFullState));
    state.id = PACKET_ID_ACTOR_FULL_STATE;
    state.flags = htonl(data->me->actor.flags);
-   state.rotation = FToBams(camera->rotation.y);
+   state.rotation = FToBams(roundf(data->me->actor.toRotation));
 
    pos.x = data->me->actor.toPosition.x;
    pos.y = data->me->actor.toPosition.y;
@@ -626,16 +626,16 @@ int main(int argc, char **argv)
 
       manageEnet(&data);
       if (gameActorFlagsIsMoving(player->flags) && fullStateTime < now) {
-         gameSendFullPlayerAndCameraState(&data, camera);
+         gameSendFullPlayerState(&data);
          fullStateTime = now + 5.0f;
          puts("SEND FULL");
       } else if (player->flags != player->lastFlags) {
          if (gameActorFlagsIsMoving(player->flags) != gameActorFlagsIsMoving(player->lastFlags)) {
-            gameSendFullPlayerAndCameraState(&data, camera);
+            gameSendFullPlayerState(&data);
             fullStateTime = now + 5.0f;
             puts("SEND FULL");
          } else {
-            gameSendPlayerAndCameraState(&data, camera);
+            gameSendPlayerState(&data);
          }
       }
       enet_host_flush(data.client);
