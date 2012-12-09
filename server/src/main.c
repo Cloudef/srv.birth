@@ -17,7 +17,6 @@ typedef struct GameActor {
 typedef struct Client {
    char host[46];
    unsigned int clientId;
-   unsigned int ping, pingTime;
    ENetPeer *peer;
    GameActor actor;
    struct Client *next;
@@ -120,7 +119,6 @@ static void sendFullState(ServerData *data, Client *target, Client *client)
    memset(&state, 0, sizeof(PacketActorFullState));
    state.id = PACKET_ID_ACTOR_FULL_STATE;
    state.clientId = htonl(target->clientId);
-   state.ping = htonl(target->ping);
    state.flags = target->actor.flags;
    state.rotation = target->actor.rotation;
    memcpy(&state.position, &target->actor.position, sizeof(Vector3B));
@@ -175,33 +173,6 @@ static void sendPart(ServerData *data, ENetEvent *event)
    printf("%s [%u] disconnected.\n", c->host, c->clientId);
 }
 
-static unsigned int timeclock()
-{
-   struct timespec now;
-   clock_gettime(CLOCK_MONOTONIC, &now);
-   return now.tv_sec*1000000 + now.tv_nsec/1000;
-}
-
-static void sendPing(ServerData *data, ENetEvent *event)
-{
-   Client *c;
-   PacketClientPing ping;
-   c = (Client*)event->peer->data;
-   memset(&ping, 0, sizeof(PacketClientPing));
-   ping.id = PACKET_ID_CLIENT_PING;
-   ping.clientId = htonl(c->clientId);
-   ping.time = htonl(timeclock());
-   serverSend(c, (unsigned char*)&ping, sizeof(PacketClientPing));
-}
-
-static void handlePing(ServerData *data, ENetEvent *event)
-{
-   Client *c;
-   PacketClientPing *ping = (PacketClientPing*)event->packet->data;
-   c = (Client*)event->peer->data;
-   c->ping = (timeclock() - ntohl(ping->time))/2500;
-}
-
 static void handleState(ServerData *data, ENetEvent *event)
 {
    REDIRECT_PACKET_TO_OTHERS(PacketActorState, data, event);
@@ -214,7 +185,6 @@ static void handleFullState(ServerData *data, ENetEvent *event)
 {
    PacketActorFullState *p = (PacketActorFullState*)event->packet->data;
    Client *client = (Client*)event->peer->data;
-   p->ping = htonl(client->ping);
    REDIRECT_PACKET_TO_OTHERS(PacketActorFullState, data, event);
    client->actor.flags = packet->flags;
    client->actor.rotation = packet->rotation;
@@ -228,10 +198,7 @@ static int manageEnet(ServerData *data)
    ENetEvent event;
    PacketGeneric *packet;
    Client *client;
-   unsigned int now;
-
    assert(data);
-   now = timeclock();
 
    /* Wait up to 1000 milliseconds for an event. */
    while (enet_host_service(data->server, &event, 1000) > 0) {
@@ -243,9 +210,7 @@ static int manageEnet(ServerData *data)
 
             /* broadcast join message to others */
             sendJoin(data, &event);
-            sendPing(data, &event);
             client = (Client*)event.peer->data;
-            client->pingTime = now + 10000;
             break;
 
          case ENET_EVENT_TYPE_RECEIVE:
@@ -261,20 +226,12 @@ static int manageEnet(ServerData *data)
              * server can use the peer->data to find out the client pointer.
              * this is so we can redirect the packets like they are for echo packets. */
             switch (packet->id) {
-               case PACKET_ID_CLIENT_PING:
-                  handlePing(data, &event);
-                  break;
                case PACKET_ID_ACTOR_STATE:
                   handleState(data, &event);
                   break;
                case PACKET_ID_ACTOR_FULL_STATE:
                   handleFullState(data, &event);
                   break;
-            }
-
-            if (client->pingTime < now) {
-               sendPing(data, &event);
-               client->pingTime = now + 10000;
             }
 
             /* Clean up the packet now that we're done using it. */

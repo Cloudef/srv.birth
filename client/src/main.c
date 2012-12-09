@@ -30,7 +30,6 @@ typedef struct GameActor {
    float speed;
    float toRotation;
    kmVec3 toPosition;
-   float interpolation;
    unsigned int flags, lastFlags;
 } GameActor;
 
@@ -49,7 +48,6 @@ typedef struct Client {
    GameActor actor;
    char host[45];
    unsigned int clientId;
-   unsigned int ping;
    struct Client *next;
 } Client;
 
@@ -239,7 +237,6 @@ static void handleJoin(ClientData *data, ENetEvent *event)
    memset(&client, 0, sizeof(Client));
    client.actor.object = glhckCubeNew(1);
    client.actor.speed  = data->me->actor.speed;
-   client.actor.interpolation = 1.0f;
    strncpy(client.host, packet->host, sizeof(client.host));
    client.clientId = packet->clientId;
    glhckObjectColorb(client.actor.object, 0, 255, 0, 255);
@@ -259,14 +256,6 @@ static void handlePart(ClientData *data, ENetEvent *event)
    glhckObjectFree(client->actor.object);
    gameFreeClient(data, client);
    event->peer->data = NULL;
-}
-
-static void handlePing(ClientData *data, ENetEvent *event)
-{
-   PacketClientPing ping;
-   memcpy(&ping, event->packet->data, sizeof(PacketClientPing));
-   gameSend(data, (unsigned char*)&ping, sizeof(PacketClientPing));
-   puts("PING!");
 }
 
 static void gameActorApplyPacket(ClientData *data, GameActor *actor, PacketActorState *packet)
@@ -296,14 +285,11 @@ static void handleFullState(ClientData *data, ENetEvent *event)
    if (!(client = clientForId(data, packet->clientId)))
       return;
 
-   client->ping = ntohl(packet->ping);
-   client->actor.interpolation = (client->ping?(float)1.0f/client->ping:1.0f);
    gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
    BamsToV3F(&pos, &packet->position);
    kpos.x = pos.x; kpos.y = pos.y; kpos.z = pos.z;
    kmVec3Assign(&client->actor.toPosition, &kpos);
-
-   printf("GOT FULL STATE [%f]\n", client->actor.interpolation);
+   printf("GOT FULL STATE\n");
 }
 
 static int manageEnet(ClientData *data)
@@ -330,9 +316,6 @@ static int manageEnet(ClientData *data)
                   break;
                case PACKET_ID_CLIENT_PART:
                   handlePart(data, &event);
-                  break;
-               case PACKET_ID_CLIENT_PING:
-                  handlePing(data, &event);
                   break;
                case PACKET_ID_ACTOR_STATE:
                   handleState(data, &event);
@@ -451,7 +434,7 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
    }
 
    if (gameActorFlagsIsMoving(actor->flags)) {
-      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, actor->interpolation);
+      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.25f);
    } else {
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.1f);
    }
@@ -544,7 +527,6 @@ int main(int argc, char **argv)
    GameActor *player = &data.me->actor;
    player->object = glhckCubeNew(1);
    player->speed  = 20;
-   player->interpolation = 1.0f;
    glhckObjectColorb(player->object, 255, 0, 0, 255);
 
    glhckObject *ground = glhckPlaneNew(100);
