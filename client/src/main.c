@@ -507,6 +507,7 @@ int main(int argc, char **argv)
    if (!glfwInit())
       return EXIT_FAILURE;
 
+   glfwWindowHint(GLFW_DEPTH_BITS, 24);
    if (!(window = glfwCreateWindow(WIDTH, HEIGHT, GLFW_WINDOWED, "srv.birth", NULL)))
       return EXIT_FAILURE;
 
