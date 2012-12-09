@@ -199,7 +199,7 @@ static void handlePing(ServerData *data, ENetEvent *event)
    Client *c;
    PacketClientPing *ping = (PacketClientPing*)event->packet->data;
    c = (Client*)event->peer->data;
-   c->ping = (timeclock() - ntohl(ping->time)) / 2000.0f;
+   c->ping = (timeclock() - ntohl(ping->time))/1000.0f;
 }
 
 static void handleState(ServerData *data, ENetEvent *event)

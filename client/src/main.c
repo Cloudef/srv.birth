@@ -238,7 +238,7 @@ static void handleJoin(ClientData *data, ENetEvent *event)
 
    memset(&client, 0, sizeof(Client));
    client.actor.object = glhckCubeNew(1);
-   client.actor.speed  = 40;
+   client.actor.speed  = data->me->actor.speed;
    client.actor.interpolation = 1.0f;
    strncpy(client.host, packet->host, sizeof(client.host));
    client.clientId = packet->clientId;
@@ -445,7 +445,7 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       actor->toPosition.z += speed * sin(kmDegreesToRadians(actor->toRotation + 90));
 
       kmVec3 targetRotation = {0.0f,actor->toRotation,0.0f};
-      kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, actor->interpolation);
+      kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, 0.18f);
    }
 
    if (actor->flags & ACTOR_BACKWARD) {
@@ -453,7 +453,7 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       actor->toPosition.z -= speed * sin(kmDegreesToRadians(actor->toRotation + 90));
 
       kmVec3 targetRotation = {0.0f,actor->toRotation + 180,0.0f};
-      kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, actor->interpolation);
+      kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, 0.18f);
    }
 
 #if 0
@@ -463,7 +463,7 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.02f);
    }
 #else
-   kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, actor->interpolation);
+   kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.33f);
 #endif
 
    glhckObjectRotation(actor->object, &actor->rotation);
@@ -552,7 +552,7 @@ int main(int argc, char **argv)
 
    GameActor *player = &data.me->actor;
    player->object = glhckCubeNew(1);
-   player->speed  = 40;
+   player->speed  = 20;
    player->interpolation = 1.0f;
    glhckObjectColorb(player->object, 255, 0, 0, 255);
 
