@@ -456,15 +456,11 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, 0.18f);
    }
 
-#if 0
    if (gameActorFlagsIsMoving(actor->flags)) {
-      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, actor->interpolation);
+      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.33f);
    } else {
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.02f);
    }
-#else
-   kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.33f);
-#endif
 
    glhckObjectRotation(actor->object, &actor->rotation);
    glhckObjectPosition(actor->object, &actor->position);
