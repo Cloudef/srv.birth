@@ -298,12 +298,17 @@ static void handleFullState(ClientData *data, ENetEvent *event)
    gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
    client->ping = ntohl(packet->ping);
    client->actor.interpolation = (client->ping?(float)1.0f/client->ping:1.0f);
-   client->actor.toRotation = floatInterpolate(client->actor.toRotation, BamsToF(packet->rotation), client->actor.interpolation);
    BamsToV3F(&pos, &packet->position);
-   kpos.x = pos.x;
-   kpos.y = pos.y;
-   kpos.z = pos.z;
-   kmVec3Interpolate(&client->actor.toPosition, &client->actor.toPosition, &kpos, client->actor.interpolation);
+   kpos.x = pos.x; kpos.y = pos.y; kpos.z = pos.z;
+
+   if (gameActorFlagsIsMoving(client->actor.flags)) {
+      client->actor.toRotation = floatInterpolate(client->actor.toRotation, BamsToF(packet->rotation), client->actor.interpolation);
+      kmVec3Interpolate(&client->actor.toPosition, &client->actor.toPosition, &kpos, client->actor.interpolation);
+   } else {
+      client->actor.toRotation = BamsToF(packet->rotation);
+      kmVec3Assign(&client->actor.toPosition, &kpos);
+   }
+
    printf("GOT FULL STATE [%f]\n", client->actor.interpolation);
 }
 
