@@ -21,36 +21,39 @@ enum {
 typedef enum PacketId {
    PACKET_ID_CLIENT_INFORMATION  = 0,
    PACKET_ID_CLIENT_PART         = 1,
-   PACKET_ID_ACTOR_STATE         = 2,
-   PACKET_ID_ACTOR_FULL_STATE    = 4
+   PACKET_ID_CLIENT_PING         = 2,
+   PACKET_ID_ACTOR_STATE         = 4,
+   PACKET_ID_ACTOR_FULL_STATE    = 8
 } PacketId;
 
-typedef struct {
-   char id;
+#define PACKET_HEADER      \
+   char id;                \
    unsigned int clientId;
-} PacketGeneric;
 
 typedef struct {
-   char id;
-   unsigned int clientId;
+   PACKET_HEADER
+} PacketGeneric;
+typedef PacketGeneric PacketClientPart;
+
+typedef struct {
+   PACKET_HEADER
    char host[45];
 } PacketClientInformation;
 
 typedef struct {
-   char id;
-   unsigned int clientId;
-} PacketClientPart;
+   PACKET_HEADER
+   unsigned int time;
+} PacketClientPing;
 
 typedef struct {
-   char id;
-   unsigned int clientId;
+   PACKET_HEADER
    unsigned int flags;
 } PacketActorState;
 
 typedef struct {
-   char id;
-   unsigned int clientId;
+   PACKET_HEADER
    unsigned int flags;
+   unsigned int ping;
    unsigned int rotation;
    Vector3B position;
 } PacketActorFullState;
