@@ -520,6 +520,11 @@ int main(int argc, char **argv)
    if (!glhckDisplayCreate(WIDTH, HEIGHT, 0))
       return EXIT_FAILURE;
 
+   /* workaround for fglrx!
+    * FIXME: figure out what causes issues on FGLRX with
+    * non-float precision and fix it on glhck */
+   glhckSetGlobalPrecision(GLHCK_INDEX_INTEGER, GLHCK_VERTEX_V3F);
+
    if (initEnet("localhost", 1234, &data) != RETURN_OK)
       return EXIT_FAILURE;
 
