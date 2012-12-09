@@ -417,6 +417,12 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       }
    }
 
+   if (actor->flags & ACTOR_JUMP) {
+      actor->toPosition.y += speed;
+   } else if (actor->toPosition.y > 0.0f) {
+      actor->toPosition.y -= speed;
+   }
+
    if (actor->flags & ACTOR_FORWARD) {
       actor->toPosition.x -= speed * cos(kmDegreesToRadians(actor->toRotation + 90));
       actor->toPosition.z += speed * sin(kmDegreesToRadians(actor->toRotation + 90));
@@ -583,6 +589,9 @@ int main(int argc, char **argv)
       }
       if (glfwGetKey(window, GLFW_KEY_S)) {
          player->flags |= ACTOR_BACKWARD;
+      }
+      if (glfwGetKey(window, GLFW_KEY_SPACE)) {
+         player->flags |= ACTOR_JUMP;
       }
 
       gameCameraUpdate(&data, camera, player);
