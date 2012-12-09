@@ -48,13 +48,14 @@ typedef struct {
 typedef struct {
    PACKET_HEADER
    unsigned int flags;
+   unsigned int rotation;
 } PacketActorState;
 
 typedef struct {
    PACKET_HEADER
    unsigned int flags;
-   unsigned int ping;
    unsigned int rotation;
+   unsigned int ping;
    Vector3B position;
 } PacketActorFullState;
 

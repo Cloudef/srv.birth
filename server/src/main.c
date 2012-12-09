@@ -199,7 +199,7 @@ static void handlePing(ServerData *data, ENetEvent *event)
    Client *c;
    PacketClientPing *ping = (PacketClientPing*)event->packet->data;
    c = (Client*)event->peer->data;
-   c->ping = (timeclock() - ntohl(ping->time))/1000.0f;
+   c->ping = (timeclock() - ntohl(ping->time))/2500;
 }
 
 static void handleState(ServerData *data, ENetEvent *event)
@@ -207,6 +207,7 @@ static void handleState(ServerData *data, ENetEvent *event)
    REDIRECT_PACKET_TO_OTHERS(PacketActorState, data, event);
    c = (Client*)event->peer->data;
    c->actor.flags = packet->flags;
+   c->actor.rotation = packet->rotation;
 }
 
 static void handleFullState(ServerData *data, ENetEvent *event)

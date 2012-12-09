@@ -272,6 +272,7 @@ static void handlePing(ClientData *data, ENetEvent *event)
 static void gameActorApplyPacket(ClientData *data, GameActor *actor, PacketActorState *packet)
 {
    actor->flags = ntohl(packet->flags);
+   actor->toRotation = BamsToF(packet->rotation);
 }
 
 static void handleState(ClientData *data, ENetEvent *event)
@@ -295,19 +296,12 @@ static void handleFullState(ClientData *data, ENetEvent *event)
    if (!(client = clientForId(data, packet->clientId)))
       return;
 
-   gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
    client->ping = ntohl(packet->ping);
    client->actor.interpolation = (client->ping?(float)1.0f/client->ping:1.0f);
+   gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
    BamsToV3F(&pos, &packet->position);
    kpos.x = pos.x; kpos.y = pos.y; kpos.z = pos.z;
-
-   if (gameActorFlagsIsMoving(client->actor.flags)) {
-      client->actor.toRotation = floatInterpolate(client->actor.toRotation, BamsToF(packet->rotation), client->actor.interpolation);
-      kmVec3Interpolate(&client->actor.toPosition, &client->actor.toPosition, &kpos, client->actor.interpolation);
-   } else {
-      client->actor.toRotation = BamsToF(packet->rotation);
-      kmVec3Assign(&client->actor.toPosition, &kpos);
-   }
+   kmVec3Assign(&client->actor.toPosition, &kpos);
 
    printf("GOT FULL STATE [%f]\n", client->actor.interpolation);
 }
@@ -457,7 +451,7 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
    }
 
    if (gameActorFlagsIsMoving(actor->flags)) {
-      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.33f);
+      kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, actor->interpolation);
    } else {
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.1f);
    }
@@ -488,6 +482,7 @@ void gameSendPlayerAndCameraState(ClientData *data, GameCamera *camera)
    memset(&state, 0, sizeof(PacketActorState));
    state.id = PACKET_ID_ACTOR_STATE;
    state.flags = htonl(data->me->actor.flags);
+   state.rotation = FToBams(camera->rotation.y);
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorState));
 }
 
@@ -500,9 +495,9 @@ void gameSendFullPlayerAndCameraState(ClientData *data, GameCamera *camera)
    state.flags = htonl(data->me->actor.flags);
    state.rotation = FToBams(camera->rotation.y);
 
-   pos.x = data->me->actor.position.x;
-   pos.y = data->me->actor.position.y;
-   pos.z = data->me->actor.position.z;
+   pos.x = data->me->actor.toPosition.x;
+   pos.y = data->me->actor.toPosition.y;
+   pos.z = data->me->actor.toPosition.z;
    V3FToBams(&state.position, &pos);
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorFullState));
 }
