@@ -129,12 +129,12 @@ static void initClientData(ClientData *data)
    data->me = gameNewClient(data, &client);
 }
 
-static void gameSend(ClientData *data, unsigned char *pdata, size_t size)
+static void gameSend(ClientData *data, unsigned char *pdata, size_t size, ENetPacketFlag flag)
 {
    ENetPacket *packet;
    PacketGeneric *generic = (PacketGeneric*)pdata;
    generic->clientId = htonl(data->me->clientId);
-   packet = enet_packet_create(pdata, size, ENET_PACKET_FLAG_RELIABLE);
+   packet = enet_packet_create(pdata, size, flag);
    enet_peer_send(data->peer, 0, packet);
 }
 
@@ -472,7 +472,7 @@ void gameSendPlayerState(ClientData *data)
    state.id = PACKET_ID_ACTOR_STATE;
    state.flags = htonl(data->me->actor.flags);
    state.rotation = FToBams(roundf(data->me->actor.toRotation));
-   gameSend(data, (unsigned char*)&state, sizeof(PacketActorState));
+   gameSend(data, (unsigned char*)&state, sizeof(PacketActorState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 }
 
 void gameSendFullPlayerState(ClientData *data)
@@ -488,7 +488,7 @@ void gameSendFullPlayerState(ClientData *data)
    pos.y = data->me->actor.toPosition.y;
    pos.z = data->me->actor.toPosition.z;
    V3FToBams(&state.position, &pos);
-   gameSend(data, (unsigned char*)&state, sizeof(PacketActorFullState));
+   gameSend(data, (unsigned char*)&state, sizeof(PacketActorFullState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 }
 
 int main(int argc, char **argv)
@@ -548,6 +548,9 @@ int main(int argc, char **argv)
       glhckObjectPositionf(cubes[i], 5.0f * (i % 39) - 95.0f, -1.0f, 5.0f * r - 95.0f);
       r += ((i+1) % 39 == 0);
    }
+
+   glfwSetWindowCloseCallback(closeCallback);
+   glfwSetWindowSizeCallback(resizeCallback);
 
    RUNNING = 1;
    float fullStateTime = glfwGetTime() + 5.0f;

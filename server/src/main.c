@@ -58,10 +58,10 @@ static void initServerData(ServerData *data)
    memset(data, 0, sizeof(ServerData));
 }
 
-static void serverSend(Client *client, unsigned char *pdata, size_t size)
+static void serverSend(Client *client, unsigned char *pdata, size_t size, ENetPacketFlag flag)
 {
    ENetPacket *packet;
-   packet = enet_packet_create(pdata, size, ENET_PACKET_FLAG_RELIABLE);
+   packet = enet_packet_create(pdata, size, flag);
    enet_peer_send(client->peer, 0, packet);
 }
 
@@ -103,14 +103,14 @@ static int deinitEnet(ServerData *data)
    return RETURN_OK;
 }
 
-#define REDIRECT_PACKET_TO_OTHERS(cast, data, event)        \
+#define REDIRECT_PACKET_TO_OTHERS(cast, data, event, f)     \
    Client *c;                                               \
    cast copy;                                               \
    cast *packet = (cast*)event->packet->data;               \
    memcpy(&copy, packet, sizeof(cast));                     \
    for (c = data->clients; c; c = c->next) {                \
       if (c == event->peer->data) continue;                 \
-      serverSend(c, (unsigned char*)&copy, sizeof(cast));   \
+      serverSend(c, (unsigned char*)&copy, sizeof(cast), f);\
    }
 
 static void sendFullState(ServerData *data, Client *target, Client *client)
@@ -122,7 +122,7 @@ static void sendFullState(ServerData *data, Client *target, Client *client)
    state.flags = target->actor.flags;
    state.rotation = target->actor.rotation;
    memcpy(&state.position, &target->actor.position, sizeof(Vector3B));
-   serverSend(client, (unsigned char*)&state, sizeof(PacketActorFullState));
+   serverSend(client, (unsigned char*)&state, sizeof(PacketActorFullState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 }
 
 static void sendJoin(ServerData *data, ENetEvent *event)
@@ -146,9 +146,9 @@ static void sendJoin(ServerData *data, ENetEvent *event)
       info2.id = PACKET_ID_CLIENT_INFORMATION;
       strncpy(info2.host, c->host, sizeof(info2.host));
       info2.clientId = htonl(c->clientId);
-      serverSend(event->peer->data, (unsigned char*)&info2, sizeof(PacketClientInformation));
+      serverSend(event->peer->data, (unsigned char*)&info2, sizeof(PacketClientInformation), ENET_PACKET_FLAG_RELIABLE);
       sendFullState(data, c, event->peer->data);
-      serverSend(c, (unsigned char*)&info, sizeof(PacketClientInformation));
+      serverSend(c, (unsigned char*)&info, sizeof(PacketClientInformation), ENET_PACKET_FLAG_RELIABLE);
    }
 
    c = (Client*)event->peer->data;
@@ -166,7 +166,7 @@ static void sendPart(ServerData *data, ENetEvent *event)
    part.clientId = htonl(c->clientId);
    for (c = data->clients; c; c = c->next) {
       if (c == event->peer->data) continue;
-      serverSend(c, (unsigned char*)&part, sizeof(PacketClientPart));
+      serverSend(c, (unsigned char*)&part, sizeof(PacketClientPart), ENET_PACKET_FLAG_RELIABLE);
    }
 
    c = (Client*)event->peer->data;
@@ -175,7 +175,7 @@ static void sendPart(ServerData *data, ENetEvent *event)
 
 static void handleState(ServerData *data, ENetEvent *event)
 {
-   REDIRECT_PACKET_TO_OTHERS(PacketActorState, data, event);
+   REDIRECT_PACKET_TO_OTHERS(PacketActorState, data, event, ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
    c = (Client*)event->peer->data;
    c->actor.flags = packet->flags;
    c->actor.rotation = packet->rotation;
@@ -185,7 +185,7 @@ static void handleFullState(ServerData *data, ENetEvent *event)
 {
    PacketActorFullState *p = (PacketActorFullState*)event->packet->data;
    Client *client = (Client*)event->peer->data;
-   REDIRECT_PACKET_TO_OTHERS(PacketActorFullState, data, event);
+   REDIRECT_PACKET_TO_OTHERS(PacketActorFullState, data, event, ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
    client->actor.flags = packet->flags;
    client->actor.rotation = packet->rotation;
    memcpy(&client->actor.position, &packet->position, sizeof(Vector3B));
