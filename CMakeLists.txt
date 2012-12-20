@@ -2,7 +2,10 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 PROJECT(srv.birth)
 
 # GLHCK options
-SET(GLHCK_BUILD_EXAMPLES OFF CACHE BOOL "Skip GLHCK examples")
+
+# FIXME: We need to include glfw to skip this
+# SET(GLHCK_BUILD_EXAMPLES OFF CACHE BOOL "Skip GLHCK examples")
+
 SET(GLHCK_IMPORT_ASSIMP ON CACHE BOOL "Enable assimp importer")
 SET(GLHCK_IMPORT_OPENCTM OFF CACHE BOOL "We don't need openctm")
 SET(GLHCK_IMPORT_MMD OFF CACHE BOOL "We don't need mmd")
