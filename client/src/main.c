@@ -30,7 +30,7 @@ typedef struct GameActor {
    float speed;
    float toRotation;
    kmVec3 toPosition;
-   unsigned int flags, lastFlags;
+   unsigned char flags, lastFlags;
    float lastActTime;
 } GameActor;
 
@@ -43,7 +43,7 @@ typedef struct GameCamera {
    float radius;
    float speed;
    float rotationSpeed;
-   unsigned int flags, lastFlags;
+   unsigned char flags, lastFlags;
 } GameCamera;
 
 typedef struct Client {
@@ -262,8 +262,8 @@ static void handlePart(ClientData *data, ENetEvent *event)
 
 static void gameActorApplyPacket(ClientData *data, GameActor *actor, PacketActorState *packet)
 {
-   actor->flags = ntohl(packet->flags);
-   actor->toRotation = BamsToF(packet->rotation);
+   actor->flags = packet->flags;
+   actor->toRotation = TODEGS(packet->rotation);
 }
 
 static void handleState(ClientData *data, ENetEvent *event)
@@ -280,17 +280,15 @@ static void handleState(ClientData *data, ENetEvent *event)
 static void handleFullState(ClientData *data, ENetEvent *event)
 {
    Client *client;
-   Vector3f pos;
-   kmVec3 kpos;
    PacketActorFullState *packet = (PacketActorFullState*)event->packet->data;
 
    if (!(client = clientForId(data, packet->clientId)))
       return;
 
    gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
-   BamsToV3F(&pos, &packet->position);
-   kpos.x = pos.x; kpos.y = pos.y; kpos.z = pos.z;
-   kmVec3Assign(&client->actor.toPosition, &kpos);
+   client->actor.toPosition.x = packet->position.x;
+   client->actor.toPosition.y = packet->position.y;
+   client->actor.toPosition.z = packet->position.z;
    printf("GOT FULL STATE\n");
 }
 
@@ -336,7 +334,7 @@ static int manageEnet(ClientData *data)
    return RETURN_OK;
 }
 
-int gameActorFlagsIsMoving(unsigned int flags)
+int gameActorFlagsIsMoving(unsigned char flags)
 {
    return (flags & ACTOR_FORWARD || flags & ACTOR_BACKWARD);
 }
@@ -431,17 +429,26 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       actor->toPosition.z += speed * sin(kmDegreesToRadians(actor->toRotation + 90));
 
       kmVec3 targetRotation = {0.0f,actor->toRotation,0.0f};
+#if 0 /* the interpolation needs to wrap around 360 */
       kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, 0.18f);
+#else
+      kmVec3Assign(&actor->rotation, &targetRotation);
+#endif
    }
 
    if (actor->flags & ACTOR_BACKWARD) {
       actor->toPosition.x += speed * cos(kmDegreesToRadians(actor->toRotation + 90));
       actor->toPosition.z -= speed * sin(kmDegreesToRadians(actor->toRotation + 90));
 
-      kmVec3 targetRotation = {0.0f,actor->toRotation + 180,0.0f};
+      kmVec3 targetRotation = {0.0f,actor->toRotation + 180.0f,0.0f};
+#if 0 /* the interpolation needs to wrap around 360 */
       kmVec3Interpolate(&actor->rotation, &actor->rotation, &targetRotation, 0.18f);
+#else
+      kmVec3Assign(&actor->rotation, &targetRotation);
+#endif
    }
 
+   /* movement interpolation */
    if (gameActorFlagsIsMoving(actor->flags)) {
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.25f);
    } else {
@@ -464,8 +471,9 @@ void gameActorUpdateFrom3rdPersonCamera(ClientData *data, GameActor *actor, Game
       }
    }
 
-   /* cut precision so we get similarly accurate representation as we send to sever */
-   actor->toRotation = BamsToF(FToBams(roundf(camera->rotation.y)));
+   /* convert bams and back to resemble the rotation sent to server */
+   unsigned char bams = TOBAMS(camera->rotation.y); bams &= 0xff;
+   actor->toRotation  = TODEGS(bams);
    gameActorUpdate(data, actor);
 }
 
@@ -474,24 +482,23 @@ void gameSendPlayerState(ClientData *data)
    PacketActorState state;
    memset(&state, 0, sizeof(PacketActorState));
    state.id = PACKET_ID_ACTOR_STATE;
-   state.flags = htonl(data->me->actor.flags);
-   state.rotation = FToBams(roundf(data->me->actor.toRotation));
+   state.flags = data->me->actor.flags;
+   state.rotation = TOBAMS(data->me->actor.toRotation);
+   state.rotation &= 0xff;
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 }
 
 void gameSendFullPlayerState(ClientData *data)
 {
-   Vector3f pos;
    PacketActorFullState state;
    memset(&state, 0, sizeof(PacketActorFullState));
    state.id = PACKET_ID_ACTOR_FULL_STATE;
-   state.flags = htonl(data->me->actor.flags);
-   state.rotation = FToBams(roundf(data->me->actor.toRotation));
-
-   pos.x = data->me->actor.toPosition.x;
-   pos.y = data->me->actor.toPosition.y;
-   pos.z = data->me->actor.toPosition.z;
-   V3FToBams(&state.position, &pos);
+   state.flags = data->me->actor.flags;
+   state.rotation = TOBAMS(data->me->actor.toRotation);
+   state.rotation &= 0xff;
+   state.position.x = data->me->actor.toPosition.x;
+   state.position.y = data->me->actor.toPosition.y;
+   state.position.z = data->me->actor.toPosition.z;
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorFullState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 }
 
@@ -594,6 +601,10 @@ int main(int argc, char **argv)
    glfwSetWindowCloseCallback(closeCallback);
    glfwSetWindowSizeCallback(resizeCallback);
 
+   int bot = 0, ac;
+   for (ac = 0; ac != argc; ++ac)
+      if (!strcmp(argv[ac], "bot")) bot = 1;
+
    RUNNING = 1;
    float fullStateTime = glfwGetTime() + 5.0f;
    while (RUNNING && glfwGetKey(window, GLFW_KEY_ESCAPE) != GLFW_PRESS) {
@@ -638,6 +649,16 @@ int main(int argc, char **argv)
       }
       if (glfwGetKey(window, GLFW_KEY_SPACE)) {
          player->flags |= ACTOR_JUMP;
+      }
+
+      if (glfwGetKey(window, GLFW_KEY_B)) {
+         bot = !bot;
+      }
+
+      /* bot mode */
+      if (bot) {
+         player->flags |= ACTOR_FORWARD;
+         camera->flags |= CAMERA_RIGHT;
       }
 
       gameCameraUpdate(&data, camera, player);

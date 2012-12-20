@@ -42,15 +42,15 @@ typedef struct {
 
 typedef struct {
    PACKET_HEADER
-   unsigned int flags;
-   unsigned int rotation;
+   unsigned char flags;
+   unsigned char rotation;
 } PacketActorState;
 
 typedef struct {
    PACKET_HEADER
-   unsigned int flags;
-   unsigned int rotation;
-   Vector3B position;
+   unsigned char flags;
+   unsigned char rotation;
+   Vector3f position;
 } PacketActorFullState;
 
 #endif /* SRVBIRTH_TYPES_H */

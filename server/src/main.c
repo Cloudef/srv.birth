@@ -9,9 +9,9 @@
 #include "../common/types.h"
 
 typedef struct GameActor {
-   unsigned int flags;
-   unsigned int rotation;
-   Vector3B position;
+   unsigned char flags;
+   unsigned char rotation;
+   Vector3f position;
 } GameActor;
 
 typedef struct Client {
@@ -121,7 +121,7 @@ static void sendFullState(ServerData *data, Client *target, Client *client)
    state.clientId = htonl(target->clientId);
    state.flags = target->actor.flags;
    state.rotation = target->actor.rotation;
-   memcpy(&state.position, &target->actor.position, sizeof(Vector3B));
+   memcpy(&state.position, &target->actor.position, sizeof(Vector3f));
    serverSend(client, (unsigned char*)&state, sizeof(PacketActorFullState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 }
 
@@ -188,7 +188,7 @@ static void handleFullState(ServerData *data, ENetEvent *event)
    REDIRECT_PACKET_TO_OTHERS(PacketActorFullState, data, event, ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
    client->actor.flags = packet->flags;
    client->actor.rotation = packet->rotation;
-   memcpy(&client->actor.position, &packet->position, sizeof(Vector3B));
+   memcpy(&client->actor.position, &packet->position, sizeof(Vector3f));
 }
 
 #undef REDIRECT_PACKET_TO_OTHERS
