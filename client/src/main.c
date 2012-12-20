@@ -31,6 +31,7 @@ typedef struct GameActor {
    float toRotation;
    kmVec3 toPosition;
    unsigned int flags, lastFlags;
+   float lastActTime;
 } GameActor;
 
 typedef struct GameCamera {
@@ -41,6 +42,7 @@ typedef struct GameCamera {
    kmVec3 offset;
    float radius;
    float speed;
+   float rotationSpeed;
    unsigned int flags, lastFlags;
 } GameCamera;
 
@@ -341,7 +343,8 @@ int gameActorFlagsIsMoving(unsigned int flags)
 
 void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
 {
-   float speed = camera->speed * data->delta; /* multiply by interpolation */
+   float speed = camera->speed * data->delta;
+   float rotationSpeed = camera->rotationSpeed * data->delta;
    kmVec3Assign(&camera->position, &target->position);
    camera->rotation.z = target->rotation.z;
 
@@ -355,31 +358,31 @@ void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
    }
 
    if (camera->flags & CAMERA_RIGHT) {
-      camera->rotation.y -= speed*2;
+      camera->rotation.y -= rotationSpeed;
       target->flags |= ACTOR_RIGHT;
    }
    if (camera->flags & CAMERA_LEFT) {
-      camera->rotation.y += speed*2;
+      camera->rotation.y += rotationSpeed;
       target->flags |= ACTOR_LEFT;
    }
 
    if (!gameActorFlagsIsMoving(target->flags)) {
       if (camera->flags & CAMERA_TURN_RIGHT) {
-         camera->rotation.y -= speed*2;
+         camera->rotation.y -= rotationSpeed;
          target->flags |= ACTOR_RIGHT;
       }
       if (camera->flags & CAMERA_TURN_LEFT) {
-         camera->rotation.y += speed*2;
+         camera->rotation.y += rotationSpeed;
          target->flags |= ACTOR_LEFT;
       }
    } else {
       if (camera->flags & CAMERA_TURN_RIGHT) {
-         camera->addRotation.y -= speed*2;
+         camera->addRotation.y -= rotationSpeed;
          camera->flags &= ~CAMERA_SLIDE;
       }
 
       if (camera->flags & CAMERA_TURN_LEFT) {
-         camera->addRotation.y += speed*2;
+         camera->addRotation.y += rotationSpeed;
          camera->flags &= ~CAMERA_SLIDE;
       }
    }
@@ -405,15 +408,15 @@ void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
 
 void gameActorUpdate(ClientData *data, GameActor *actor)
 {
-   float speed = actor->speed * data->delta; /* multiply by interpolation */
+   float speed = actor->speed * data->delta;
 
    if (actor != &data->me->actor) {
-      float cspeed = data->camera.speed * data->delta; /* camera speed for other players */
+      float cspeed = data->camera.rotationSpeed * data->delta; /* camera speed for other players */
       if (actor->flags & ACTOR_LEFT) {
-         actor->toRotation += cspeed*2;
+         actor->toRotation += cspeed;
       }
       if (actor->flags & ACTOR_RIGHT) {
-         actor->toRotation -= cspeed*2;
+         actor->toRotation -= cspeed;
       }
    }
 
@@ -461,7 +464,8 @@ void gameActorUpdateFrom3rdPersonCamera(ClientData *data, GameActor *actor, Game
       }
    }
 
-   actor->toRotation = roundf(camera->rotation.y);
+   /* cut precision so we get similarly accurate representation as we send to sever */
+   actor->toRotation = BamsToF(FToBams(roundf(camera->rotation.y)));
    gameActorUpdate(data, actor);
 }
 
@@ -527,6 +531,7 @@ int main(int argc, char **argv)
    camera->object = glhckCameraNew();
    camera->radius = 30;
    camera->speed  = 60;
+   camera->rotationSpeed = 180;
    camera->rotation.x = 10.0f;
    kmVec3Fill(&camera->offset, 0.0f, 5.0f, 0.0f);
    glhckCameraRange(camera->object, 1.0f, 500.0f);
@@ -536,18 +541,55 @@ int main(int argc, char **argv)
    player->speed  = 20;
    glhckObjectColorb(player->object, 255, 0, 0, 255);
 
-   glhckObject *ground = glhckPlaneNew(100);
-   glhckObjectRotatef(ground, 90.0f, 0.0f, 0.0f);
-   glhckObjectPositionf(ground, 0.0f, -1.0f, 0.0f);
+   typedef struct DungeonPart {
+      char *file;
+      float w, h;
+   } DungeonPart;
 
-   unsigned int i, r, c = 1521;
+   DungeonPart parts[8];
+   parts[0].file = "media/cave_01.x";
+   parts[0].w = 63.2f;
+   parts[0].h = 72.4f;
+   parts[1].file = "media/cave_02.x";
+   parts[1].w = 100.0f;
+   parts[1].h = 100.0f;
+   parts[2].file = "media/cave_03.x";
+   parts[2].w = 67.3f;
+   parts[2].h = 67.3f;
+   parts[3].file = "media/cave_04.x";
+   parts[3].w = 63.0f;
+   parts[3].h = 72.0f;
+   parts[4].file = "media/cave_05.x";
+   parts[4].w = 100.0f;
+   parts[4].h = 100.0f;
+   parts[5].file = "media/cave_06.x";
+   parts[5].w = 100.0f;
+   parts[5].h = 100.0f;
+   parts[6].file = "media/cave_09.x";
+   parts[6].w = 100.0f;
+   parts[6].h = 100.0f;
+   parts[7].file = "media/cave_10.x";
+   parts[7].w = 100.0f;
+   parts[7].h = 100.0f;
+
+#if 1
+   unsigned int i, c = 20;
    glhckObject *cubes[c];
-   for (i = 0, r = 0; i != c; ++i) {
-      cubes[i] = glhckCubeNew(1);
-      glhckObjectColorb(cubes[i], 0, 0, 255, 255);
-      glhckObjectPositionf(cubes[i], 5.0f * (i % 39) - 95.0f, -1.0f, 5.0f * r - 95.0f);
-      r += ((i+1) % 39 == 0);
+   unsigned int p = 0;
+   float x = -parts[p].w, sx = x;
+   float y = -parts[p].h;
+   for (i = 0; i != c; ++i) {
+      cubes[i] = glhckModelNew(parts[p].file, 0.5f, 0);
+      glhckObjectPositionf(cubes[i], x, -1.0f, y);
+
+      x += parts[p].w;
+      if ((i+1) % 5 == 0) {
+         x = sx;
+         y += parts[p].h;
+      }
+      // p = rand() % 1;
    }
+#endif
 
    glfwSetWindowCloseCallback(closeCallback);
    glfwSetWindowSizeCallback(resizeCallback);
@@ -602,7 +644,6 @@ int main(int argc, char **argv)
       gameActorUpdateFrom3rdPersonCamera(&data, player, camera);
 
       glhckCameraUpdate(camera->object);
-      glhckObjectDraw(ground);
       glhckObjectDraw(player->object);
 
       Client *c2;
@@ -611,9 +652,11 @@ int main(int argc, char **argv)
          glhckObjectDraw(c2->actor.object);
       }
 
+#if 1
       for (i = 0; i != c; ++i) {
          glhckObjectDraw(cubes[i]);
       }
+#endif
 
       glhckRender();
       glfwSwapBuffers(window);
@@ -625,10 +668,16 @@ int main(int argc, char **argv)
          fullStateTime = now + 5.0f;
          puts("SEND FULL");
       } else if (player->flags != player->lastFlags) {
-         if (gameActorFlagsIsMoving(player->flags) != gameActorFlagsIsMoving(player->lastFlags)) {
+         if (!gameActorFlagsIsMoving(player->flags) &&
+              gameActorFlagsIsMoving(player->lastFlags) &&
+              now-player->lastActTime > 2.0f) {
             gameSendFullPlayerState(&data);
             fullStateTime = now + 5.0f;
-            puts("SEND FULL");
+            printf("SEND FULL: %.0f\n", now-player->lastActTime);
+         } else if (gameActorFlagsIsMoving(player->flags) !=
+               gameActorFlagsIsMoving(player->lastFlags)) {
+            player->lastActTime = now;
+            gameSendPlayerState(&data);
          } else {
             gameSendPlayerState(&data);
          }
