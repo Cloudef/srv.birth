@@ -32,6 +32,7 @@ typedef struct GameActor {
    kmVec3 toPosition;
    unsigned char flags, lastFlags;
    float lastActTime;
+   char shouldInterpolate;
 } GameActor;
 
 typedef struct GameCamera {
@@ -135,7 +136,6 @@ static void gameSend(ClientData *data, unsigned char *pdata, size_t size, ENetPa
 {
    ENetPacket *packet;
    PacketGeneric *generic = (PacketGeneric*)pdata;
-   generic->clientId = htonl(data->me->clientId);
    packet = enet_packet_create(pdata, size, flag);
    enet_peer_send(data->peer, 0, packet);
 }
@@ -162,6 +162,10 @@ static int initEnet(const char *host_ip, const int host_port, ClientData *data)
             "An error occurred while trying to create an ENet client host.\n");
       return RETURN_FAIL;
    }
+
+   /* Enable compression */
+   data->client->checksum = enet_crc32;
+   enet_host_compress_with_range_coder(data->client);
 
    /* Connect to some.server.net:1234. */
    enet_address_set_host(&address, host_ip);
@@ -234,7 +238,7 @@ static int deinitEnet(ClientData *data)
 static void handleJoin(ClientData *data, ENetEvent *event)
 {
    Client client;
-   PacketClientInformation *packet = (PacketClientInformation*)event->packet->data;
+   PacketServerClientInformation *packet = (PacketServerClientInformation*)event->packet->data;
 
    memset(&client, 0, sizeof(Client));
    client.actor.object = glhckCubeNew(1);
@@ -249,7 +253,7 @@ static void handleJoin(ClientData *data, ENetEvent *event)
 static void handlePart(ClientData *data, ENetEvent *event)
 {
    Client *client;
-   PacketClientPart *packet = (PacketClientPart*)event->packet->data;
+   PacketServerClientPart *packet = (PacketServerClientPart*)event->packet->data;
 
    if (!(client = clientForId(data, packet->clientId)))
       return;
@@ -260,7 +264,7 @@ static void handlePart(ClientData *data, ENetEvent *event)
    event->peer->data = NULL;
 }
 
-static void gameActorApplyPacket(ClientData *data, GameActor *actor, PacketActorState *packet)
+static void gameActorApplyPacket(ClientData *data, GameActor *actor, PacketServerActorState *packet)
 {
    actor->flags = packet->flags;
    actor->toRotation = TODEGS(packet->rotation);
@@ -269,7 +273,7 @@ static void gameActorApplyPacket(ClientData *data, GameActor *actor, PacketActor
 static void handleState(ClientData *data, ENetEvent *event)
 {
    Client *client;
-   PacketActorState *packet = (PacketActorState*)event->packet->data;
+   PacketServerActorState *packet = (PacketServerActorState*)event->packet->data;
 
    if (!(client = clientForId(data, packet->clientId)))
       return;
@@ -280,35 +284,43 @@ static void handleState(ClientData *data, ENetEvent *event)
 static void handleFullState(ClientData *data, ENetEvent *event)
 {
    Client *client;
-   PacketActorFullState *packet = (PacketActorFullState*)event->packet->data;
+   PacketServerActorFullState *packet = (PacketServerActorFullState*)event->packet->data;
 
    if (!(client = clientForId(data, packet->clientId)))
       return;
 
-   gameActorApplyPacket(data, &client->actor, (PacketActorState*)packet); /* handle the delta part */
+   gameActorApplyPacket(data, &client->actor, (PacketServerActorState*)packet); /* handle the delta part */
    client->actor.toPosition.x = packet->position.x;
    client->actor.toPosition.y = packet->position.y;
    client->actor.toPosition.z = packet->position.z;
+   if (!client->actor.shouldInterpolate) {
+      client->actor.rotation.y = client->actor.toRotation;
+      memcpy(&client->actor.position, &client->actor.toPosition, sizeof(kmVec3));
+      client->actor.shouldInterpolate = 1;
+   }
    printf("GOT FULL STATE\n");
 }
 
 static int manageEnet(ClientData *data)
 {
    ENetEvent event;
-   PacketGeneric *packet;
+   PacketServerGeneric *packet;
    assert(data);
 
    /* Wait up to 1000 milliseconds for an event. */
    while (enet_host_service(data->client, &event, 0) > 0) {
       switch (event.type) {
          case ENET_EVENT_TYPE_RECEIVE:
-            printf("A packet of length %u containing %s was received on channel %u.\n",
+            /* discard bad packets */
+            if (event.packet->dataLength < sizeof(PacketServerGeneric))
+               break;
+
+            printf("A packet of length %u was received on channel %u.\n",
                   event.packet->dataLength,
-                  event.packet->data,
                   event.channelID);
 
             /* handle packet */
-            packet = (PacketGeneric*)event.packet->data;
+            packet = (PacketServerGeneric*)event.packet->data;
             packet->clientId = ntohl(packet->clientId);
             switch (packet->id) {
                case PACKET_ID_CLIENT_INFORMATION:
@@ -607,6 +619,9 @@ int main(int argc, char **argv)
 
    RUNNING = 1;
    float fullStateTime = glfwGetTime() + 5.0f;
+   float botTime = glfwGetTime();
+   unsigned char botFlags = 0;
+   srand(time(NULL));
    while (RUNNING && glfwGetKey(window, GLFW_KEY_ESCAPE) != GLFW_PRESS) {
       last       = now;
       now        = glfwGetTime();
@@ -658,7 +673,15 @@ int main(int argc, char **argv)
       /* bot mode */
       if (bot) {
          player->flags |= ACTOR_FORWARD;
-         camera->flags |= CAMERA_RIGHT;
+         camera->flags |= botFlags;
+         if (botTime < now) {
+            botFlags = 0;
+            if (rand() % 2 == 0)
+               botFlags |= CAMERA_RIGHT;
+            else if (rand() % 2 == 0)
+               botFlags |= CAMERA_LEFT;
+            botTime = now + 1.0f;
+         }
       }
 
       gameCameraUpdate(&data, camera, player);

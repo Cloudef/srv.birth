@@ -26,32 +26,55 @@ typedef enum PacketId {
    PACKET_ID_ACTOR_FULL_STATE    = 4
 } PacketId;
 
-#define PACKET_HEADER      \
-   char id;                \
-   unsigned int clientId;
+/* Server will send PacketServer<packet name> packets,
+ * and recieves Packet<packet name> packets.
+ *
+ * Client sends Packet<packet name> packets,
+ * and receives PacketServer<packet name> packets.
+ *
+ * This is because client does not need to send as much information
+ * to server as server has to send to clients. */
 
-typedef struct {
-   PACKET_HEADER
-} PacketGeneric;
-typedef PacketGeneric PacketClientPart;
+#pragma pack(push,1)
 
+#define PACKET_SERVER_HEADER \
+   unsigned int clientId;    \
+   unsigned char id;
+
+#define PACKET_CLIENT_HEADER \
+   unsigned char id;
+
+#define DEFINE_PACKET(name, types) \
+   typedef struct {                \
+      PACKET_CLIENT_HEADER         \
+      types                        \
+   } Packet##name;                 \
+   typedef struct {                \
+      PACKET_SERVER_HEADER         \
+      types                        \
+   } PacketServer##name;           \
+
+/* generic packets */
+DEFINE_PACKET(Generic, ;);
+
+/* server only packets */
 typedef struct {
-   PACKET_HEADER
+   PACKET_SERVER_HEADER
    char host[45];
-} PacketClientInformation;
+} PacketServerClientInformation;
+typedef PacketServerGeneric PacketServerClientPart;
 
-typedef struct {
-   PACKET_HEADER
-   unsigned char flags;
-   unsigned char rotation;
-} PacketActorState;
+/* client<->server packets */
+DEFINE_PACKET(ActorState,
+      unsigned char flags;
+      unsigned char rotation;);
 
-typedef struct {
-   PACKET_HEADER
-   unsigned char flags;
-   unsigned char rotation;
-   Vector3f position;
-} PacketActorFullState;
+DEFINE_PACKET(ActorFullState,
+      unsigned char flags;
+      unsigned char rotation;
+      Vector3f position;);
+
+#pragma pack(pop)
 
 #endif /* SRVBIRTH_TYPES_H */
 

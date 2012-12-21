@@ -93,6 +93,10 @@ static int initEnet(const char *host_ip, const int host_port, ServerData *data)
       return RETURN_FAIL;
    }
 
+   /* enable compression */
+   data->server->checksum = enet_crc32;
+   enet_host_compress_with_range_coder(data->server);
+
    return RETURN_OK;
 }
 
@@ -103,19 +107,9 @@ static int deinitEnet(ServerData *data)
    return RETURN_OK;
 }
 
-#define REDIRECT_PACKET_TO_OTHERS(cast, data, event, f)     \
-   Client *c;                                               \
-   cast copy;                                               \
-   cast *packet = (cast*)event->packet->data;               \
-   memcpy(&copy, packet, sizeof(cast));                     \
-   for (c = data->clients; c; c = c->next) {                \
-      if (c == event->peer->data) continue;                 \
-      serverSend(c, (unsigned char*)&copy, sizeof(cast), f);\
-   }
-
 static void sendFullState(ServerData *data, Client *target, Client *client)
 {
-   PacketActorFullState state;
+   PacketServerActorFullState state;
    memset(&state, 0, sizeof(PacketActorFullState));
    state.id = PACKET_ID_ACTOR_FULL_STATE;
    state.clientId = htonl(target->clientId);
@@ -134,21 +128,21 @@ static void sendJoin(ServerData *data, ENetEvent *event)
    enet_address_get_host_ip(&event->peer->address, client.host, sizeof(client.host));
    event->peer->data = serverNewClient(data, &client);
 
-   PacketClientInformation info;
-   memset(&info, 0, sizeof(PacketClientInformation));
+   PacketServerClientInformation info;
+   memset(&info, 0, sizeof(PacketServerClientInformation));
    info.id = PACKET_ID_CLIENT_INFORMATION;
    strncpy(info.host, client.host, sizeof(info.host));
    info.clientId = htonl(client.clientId);
    for (c = data->clients; c; c = c->next) {
       if (c == event->peer->data) continue;
-      PacketClientInformation info2;
-      memset(&info2, 0, sizeof(PacketClientInformation));
+      PacketServerClientInformation info2;
+      memset(&info2, 0, sizeof(PacketServerClientInformation));
       info2.id = PACKET_ID_CLIENT_INFORMATION;
       strncpy(info2.host, c->host, sizeof(info2.host));
       info2.clientId = htonl(c->clientId);
-      serverSend(event->peer->data, (unsigned char*)&info2, sizeof(PacketClientInformation), ENET_PACKET_FLAG_RELIABLE);
+      serverSend(event->peer->data, (unsigned char*)&info2, sizeof(PacketServerClientInformation), ENET_PACKET_FLAG_RELIABLE);
       sendFullState(data, c, event->peer->data);
-      serverSend(c, (unsigned char*)&info, sizeof(PacketClientInformation), ENET_PACKET_FLAG_RELIABLE);
+      serverSend(c, (unsigned char*)&info, sizeof(PacketServerClientInformation), ENET_PACKET_FLAG_RELIABLE);
    }
 
    c = (Client*)event->peer->data;
@@ -158,15 +152,15 @@ static void sendJoin(ServerData *data, ENetEvent *event)
 static void sendPart(ServerData *data, ENetEvent *event)
 {
    Client *c;
-   PacketClientPart part;
+   PacketServerClientPart part;
 
    c = (Client*)event->peer->data;
-   memset(&part, 0, sizeof(PacketClientPart));
+   memset(&part, 0, sizeof(PacketServerClientPart));
    part.id = PACKET_ID_CLIENT_PART;
    part.clientId = htonl(c->clientId);
    for (c = data->clients; c; c = c->next) {
       if (c == event->peer->data) continue;
-      serverSend(c, (unsigned char*)&part, sizeof(PacketClientPart), ENET_PACKET_FLAG_RELIABLE);
+      serverSend(c, (unsigned char*)&part, sizeof(PacketServerClientPart), ENET_PACKET_FLAG_RELIABLE);
    }
 
    c = (Client*)event->peer->data;
@@ -175,23 +169,43 @@ static void sendPart(ServerData *data, ENetEvent *event)
 
 static void handleState(ServerData *data, ENetEvent *event)
 {
-   REDIRECT_PACKET_TO_OTHERS(PacketActorState, data, event, ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
-   c = (Client*)event->peer->data;
-   c->actor.flags = packet->flags;
-   c->actor.rotation = packet->rotation;
+   PacketServerActorState state;
+   PacketActorState *p = (PacketActorState*)event->packet->data;
+   Client *c, *client = (Client*)event->peer->data;
+
+   state.id = p->id;
+   state.clientId = htonl(client->clientId);
+   state.flags = p->flags;
+   state.rotation = p->rotation;
+   for (c = data->clients; c; c = c->next) {
+      if (c == client) continue;
+      serverSend(c, (unsigned char*)&state, sizeof(PacketServerActorState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
+   }
+
+   client->actor.flags = p->flags;
+   client->actor.rotation = p->rotation;
 }
 
 static void handleFullState(ServerData *data, ENetEvent *event)
 {
+   PacketServerActorFullState state;
    PacketActorFullState *p = (PacketActorFullState*)event->packet->data;
-   Client *client = (Client*)event->peer->data;
-   REDIRECT_PACKET_TO_OTHERS(PacketActorFullState, data, event, ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
-   client->actor.flags = packet->flags;
-   client->actor.rotation = packet->rotation;
-   memcpy(&client->actor.position, &packet->position, sizeof(Vector3f));
-}
+   Client *c, *client = (Client*)event->peer->data;
 
-#undef REDIRECT_PACKET_TO_OTHERS
+   state.id = p->id;
+   state.clientId = htonl(client->clientId);
+   state.flags = p->flags;
+   state.rotation = p->rotation;
+   memcpy(&state.position, &p->position, sizeof(Vector3f));
+   for (c = data->clients; c; c = c->next) {
+      if (c == client) continue;
+      serverSend(c, (unsigned char*)&state, sizeof(PacketServerActorFullState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
+   }
+
+   client->actor.flags = p->flags;
+   client->actor.rotation = p->rotation;
+   memcpy(&client->actor.position, &p->position, sizeof(Vector3f));
+}
 
 static int manageEnet(ServerData *data)
 {
@@ -214,17 +228,17 @@ static int manageEnet(ServerData *data)
             break;
 
          case ENET_EVENT_TYPE_RECEIVE:
-            printf("A packet of length %u containing %s was received on channel %u.\n",
+            /* discard bad packets */
+            if (event.packet->dataLength < sizeof(PacketGeneric))
+               break;
+
+            printf("A packet of length %u was received on channel %u.\n",
                   event.packet->dataLength,
-                  event.packet->data,
                   event.channelID);
 
             /* handle packet */
             client = (Client*)event.peer->data;
             packet = (PacketGeneric*)event.packet->data;
-            /* we have no reason to ntohl the clientId here.
-             * server can use the peer->data to find out the client pointer.
-             * this is so we can redirect the packets like they are for echo packets. */
             switch (packet->id) {
                case PACKET_ID_ACTOR_STATE:
                   handleState(data, &event);
