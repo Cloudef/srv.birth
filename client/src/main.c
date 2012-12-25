@@ -24,14 +24,15 @@ enum {
 };
 
 typedef struct GameActor {
-   glhckObject *object;
    kmVec3 rotation;
    kmVec3 position;
+   kmVec3 lastPosition;
+   kmVec3 toPosition;
    float speed;
    float toRotation;
-   kmVec3 toPosition;
-   unsigned char flags, lastFlags;
    float lastActTime;
+   glhckObject *object;
+   unsigned char flags, lastFlags;
    char shouldInterpolate;
 } GameActor;
 
@@ -49,18 +50,18 @@ typedef struct GameCamera {
 
 typedef struct Client {
    GameActor actor;
-   char host[45];
    unsigned int clientId;
+   char host[45];
    struct Client *next;
 } Client;
 
 typedef struct ClientData {
+   GameCamera camera;
+   float delta;
    ENetHost *client;
    ENetPeer *peer;
    Client *me;
-   GameCamera camera;
    Client *clients;
-   float delta;
 } ClientData;
 
 static inline kmVec3* kmVec3Interpolate(kmVec3* pOut, const kmVec3* pIn, const kmVec3* other, float d)
@@ -409,9 +410,10 @@ void gameCameraUpdate(ClientData *data, GameCamera *camera, GameActor *target)
    if (camera->rotation.x > 30) camera->rotation.x = 30;
    if (camera->rotation.x < 0) camera->rotation.x  = 0;
 
-   glhckObject *internalObject = glhckCameraGetObject(camera->object);
-   kmVec3 targetPosition = target->position;
+   kmVec3 targetPosition = {0.0f,0.0f,0.0f};
+   kmVec3Assign(&targetPosition, &target->position);
    kmVec3Add(&targetPosition, &targetPosition, &camera->offset);
+   glhckObject *internalObject = glhckCameraGetObject(camera->object);
    glhckObjectTarget(internalObject, &targetPosition);
    glhckObjectPosition(internalObject, &camera->position);
 }
@@ -437,8 +439,8 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
    }
 
    if (actor->flags & ACTOR_FORWARD) {
-      actor->toPosition.x -= speed * cos(kmDegreesToRadians(actor->toRotation + 90));
-      actor->toPosition.z += speed * sin(kmDegreesToRadians(actor->toRotation + 90));
+      actor->toPosition.x -= speed * cosf(kmDegreesToRadians(actor->toRotation + 90));
+      actor->toPosition.z += speed * sinf(kmDegreesToRadians(actor->toRotation + 90));
 
       kmVec3 targetRotation = {0.0f,actor->toRotation,0.0f};
 #if 0 /* the interpolation needs to wrap around 360 */
@@ -449,8 +451,8 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
    }
 
    if (actor->flags & ACTOR_BACKWARD) {
-      actor->toPosition.x += speed * cos(kmDegreesToRadians(actor->toRotation + 90));
-      actor->toPosition.z -= speed * sin(kmDegreesToRadians(actor->toRotation + 90));
+      actor->toPosition.x += speed * cosf(kmDegreesToRadians(actor->toRotation + 90));
+      actor->toPosition.z -= speed * sinf(kmDegreesToRadians(actor->toRotation + 90));
 
       kmVec3 targetRotation = {0.0f,actor->toRotation + 180.0f,0.0f};
 #if 0 /* the interpolation needs to wrap around 360 */
@@ -460,6 +462,9 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
 #endif
    }
 
+   /* assign last position */
+   kmVec3Assign(&actor->lastPosition, &actor->position);
+
    /* movement interpolation */
    if (gameActorFlagsIsMoving(actor->flags)) {
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.25f);
@@ -467,6 +472,7 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.1f);
    }
 
+   if (actor->position.y < 0.0f) actor->position.y = 0.0f;
    glhckObjectRotation(actor->object, &actor->rotation);
    glhckObjectPosition(actor->object, &actor->position);
 }
@@ -514,6 +520,20 @@ void gameSendFullPlayerState(ClientData *data)
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorFullState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 }
 
+float sign(const kmVec3 *p1, const kmVec3 *p2, const kmVec3 *p3)
+{
+   return (p1->x - p3->x) * (p2->z - p3->z) - (p2->x - p3->x) * (p1->z - p3->z);
+}
+
+int PointInTriangle(const kmVec3 *pt, const kmVec3 *v1, const kmVec3 *v2, const kmVec3 *v3)
+{
+   int b1, b2, b3;
+   b1 = sign(pt, v1, v2) < 0.0f;
+   b2 = sign(pt, v2, v3) < 0.0f;
+   b3 = sign(pt, v3, v1) < 0.0f;
+   return ((b1 == b2) && (b2 == b3));
+}
+
 int main(int argc, char **argv)
 {
    /* global data */
@@ -540,7 +560,7 @@ int main(int argc, char **argv)
    if (!glhckInit(argc, argv))
       return EXIT_FAILURE;
 
-   if (!glhckDisplayCreate(WIDTH, HEIGHT, 0))
+   if (!glhckDisplayCreate(WIDTH, HEIGHT, GLHCK_RENDER_AUTO))
       return EXIT_FAILURE;
 
    if (initEnet("localhost", 1234, &data) != RETURN_OK)
@@ -591,12 +611,11 @@ int main(int argc, char **argv)
    parts[7].w = 100.0f;
    parts[7].h = 100.0f;
 
-#if 1
    unsigned int i, c = 20;
    glhckObject *cubes[c];
-   unsigned int p = 0;
+   unsigned int p = rand() % 1;
    float x = -parts[p].w, sx = x;
-   float y = -parts[p].h;
+   float y = -parts[p].h+4;
    for (i = 0; i != c; ++i) {
       cubes[i] = glhckModelNew(parts[p].file, 0.5f, 0);
       glhckObjectPositionf(cubes[i], x, -1.0f, y);
@@ -606,18 +625,22 @@ int main(int argc, char **argv)
          x = sx;
          y += parts[p].h;
       }
-      // p = rand() % 1;
+      p = rand() % 1;
    }
-#endif
 
-   glfwSetWindowCloseCallback(closeCallback);
-   glfwSetWindowSizeCallback(resizeCallback);
+   glhckObject *wall = glhckCubeNew(1.0f);
+   glhckObjectScalef(wall, 0.1f, 10.0f, 0.1f);
+   glhckObjectColorb(wall, 0, 255, 0, 255);
+
+   glfwSetWindowCloseCallback(window, closeCallback);
+   glfwSetWindowSizeCallback(window, resizeCallback);
 
    int bot = 0, ac;
    for (ac = 0; ac != argc; ++ac)
       if (!strcmp(argv[ac], "bot")) bot = 1;
 
    RUNNING = 1;
+   int col = 0;
    float fullStateTime = glfwGetTime() + 5.0f;
    float botTime = glfwGetTime();
    unsigned char botFlags = 0;
@@ -684,28 +707,77 @@ int main(int argc, char **argv)
          }
       }
 
+      size_t v, vi;
+      int lcol = col; col = 0; p;
+      Client *c2;
+
+      /* visualize */
+      for (i = 0; i != c; ++i) {
+         glhckObject *floor = glhckObjectChildren(cubes[i], NULL)[1];
+         glhckObjectColorb(floor, 255, 255, 255, 255);
+      }
+
+      /* collision */
+      for (c2 = data.clients; c2; c2 = c2->next) {
+         const kmAABB *aabb = glhckObjectGetAABB(c2->actor.object);
+         col = 0;
+         for (i = 0; i != c; ++i) {
+            glhckObject *floor = glhckObjectChildren(cubes[i], NULL)[1];
+            const kmAABB *aabbp = glhckObjectGetAABB(floor);
+            if (kmAABBContainsAABB(aabbp, aabb) == KM_CONTAINS_NONE) continue;
+            glhckObjectColorb(floor, 255, 0, 0, 255);
+            const kmMat4 *mat = glhckObjectGetMatrix(floor);
+            glhckGeometry *g = glhckObjectGetGeometry(floor);
+            for (vi = 0, p = 0; vi < g->indexCount; ++vi) {
+               glhckVector3f vt; kmVec3 tvt[3];
+               v = glhckGeometryVertexIndexForIndex(g, vi);
+               glhckGeometryVertexDataForIndex(g, v, &vt, NULL, NULL, NULL, NULL);
+               tvt[p].x = vt.x; tvt[p].y = vt.y; tvt[p].z = vt.z;
+               kmVec3Transform(&tvt[p], &tvt[p], mat);
+
+               if (++p == 3) {
+                  kmVec3 center;
+                  if (PointInTriangle(kmAABBCentre(glhckObjectGetAABB(player->object), &center),
+                           &tvt[0], &tvt[1], &tvt[2])) {
+                     for (p = 0; p != 3; ++p) {
+                        glhckObjectPosition(wall, &tvt[p]);
+                        glhckObjectRender(wall);
+                     }
+                     col = 1;
+                     break;
+                  } p = 0;
+               }
+            }
+         }
+         if (col != lcol && !col) puts("NO COL");
+         if (col) {
+            kmVec3Assign(&c2->actor.position, &c2->actor.lastPosition);
+            kmVec3Assign(&c2->actor.toPosition, &c2->actor.lastPosition);
+         }
+      }
+
+      /* update me */
       gameCameraUpdate(&data, camera, player);
       gameActorUpdateFrom3rdPersonCamera(&data, player, camera);
 
-      glhckCameraUpdate(camera->object);
-      glhckObjectDraw(player->object);
-
-      Client *c2;
+      /* update other actors and draw all actors */
       for (c2 = data.clients; c2; c2 = c2->next) {
          if (&c2->actor != player) gameActorUpdate(&data, &c2->actor);
          glhckObjectDraw(c2->actor.object);
       }
 
-#if 1
+      /* draw world */
       for (i = 0; i != c; ++i) {
          glhckObjectDraw(cubes[i]);
       }
-#endif
 
+      /* render */
+      glhckCameraUpdate(camera->object);
       glhckRender();
       glfwSwapBuffers(window);
       glhckClear();
 
+      /* manage packets */
       manageEnet(&data);
       if (gameActorFlagsIsMoving(player->flags) && fullStateTime < now) {
          gameSendFullPlayerState(&data);
