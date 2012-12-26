@@ -581,6 +581,8 @@ int main(int argc, char **argv)
    kmVec3Fill(&camera->offset, 0.0f, 5.0f, 0.0f);
    glhckCameraRange(camera->object, 1.0f, 500.0f);
 
+   glhckObject *playerText = glhckTextPlane(text, font, 42, "Player", GLHCK_TEXTURE_DEFAULTS);
+   if (playerText) glhckObjectScalef(playerText, 0.05f, 0.05f, 1.0f);
    GameActor *player = &data.me->actor;
    player->object = glhckCubeNew(1);
    player->speed  = 20;
@@ -766,6 +768,14 @@ int main(int argc, char **argv)
       gameCameraUpdate(&data, camera, player);
       gameActorUpdateFrom3rdPersonCamera(&data, player, camera);
 
+      /* player text */
+      if (playerText) {
+         glhckObjectPosition(playerText, &player->position);
+         glhckObjectMovef(playerText, 0, 8, 0);
+         glhckObjectTarget(playerText, &camera->position);
+         glhckObjectDraw(playerText);
+      }
+
       /* update other actors and draw all actors */
       for (c2 = data.clients; c2; c2 = c2->next) {
          if (&c2->actor != player) gameActorUpdate(&data, &c2->actor);
@@ -781,6 +791,10 @@ int main(int argc, char **argv)
       /* render */
       glhckCameraUpdate(camera->object);
       glhckRender();
+
+      glhckTextDraw(text, font, 18, 0,  HEIGHT-4, WIN_TITLE, NULL);
+      glhckTextRender(text);
+
       glfwSwapBuffers(window);
       glhckClear();
 
@@ -812,18 +826,6 @@ int main(int argc, char **argv)
             FPS = (float)frameCounter / duration;
             snprintf(WIN_TITLE, sizeof(WIN_TITLE)-1, "OpenGL [FPS: %d]", FPS);
             glfwSetWindowTitle(window, WIN_TITLE);
-
-            /* update player text */
-            glhckObject *pt = glhckTextPlane(text, font, 42, WIN_TITLE, GLHCK_TEXTURE_DEFAULTS);
-            glhckObjectRemoveAllChildren(player->object);
-            if (pt) {
-               glhckObjectAddChildren(player->object, pt);
-               glhckObjectScalef(pt, 0.05f, 0.05f, 1.0f);
-               glhckObjectRotatef(pt, 0, 180, 0);
-               glhckObjectPositionf(pt, 0, 8, 0);
-               glhckObjectFree(pt);
-            }
-
             frameCounter = 0; fpsDelay = now + 1; duration = 0;
          }
       }
