@@ -545,6 +545,8 @@ int main(int argc, char **argv)
    unsigned int   FPS          = 0;
    unsigned int   fpsDelay     = 0;
    float          duration     = 0;
+   char           WIN_TITLE[256];
+   memset(WIN_TITLE, 0, sizeof(WIN_TITLE));
    initClientData(&data);
 
    if (!glfwInit())
@@ -554,7 +556,7 @@ int main(int argc, char **argv)
    if (!(window = glfwCreateWindow(WIDTH, HEIGHT, GLFW_WINDOWED, "srv.birth", NULL)))
       return EXIT_FAILURE;
 
-   glfwSwapInterval(1);
+   glfwSwapInterval(0);
    glfwMakeContextCurrent(window);
 
    if (!glhckInit(argc, argv))
@@ -565,6 +567,10 @@ int main(int argc, char **argv)
 
    if (initEnet("localhost", 1234, &data) != RETURN_OK)
       return EXIT_FAILURE;
+
+   glhckText *text = glhckTextNew(512, 512);
+   glhckTextColor(text, 255, 255, 255, 255);
+   unsigned int font = glhckTextNewFont(text, "media/DejaVuSans.ttf");
 
    GameCamera *camera = &data.camera;
    camera->object = glhckCameraNew();
@@ -737,7 +743,7 @@ int main(int argc, char **argv)
 
                if (++p == 3) {
                   kmVec3 center;
-                  if (PointInTriangle(kmAABBCentre(glhckObjectGetAABB(player->object), &center),
+                  if (PointInTriangle(kmAABBCentre(aabb, &center),
                            &tvt[0], &tvt[1], &tvt[2])) {
                      for (p = 0; p != 3; ++p) {
                         glhckObjectPosition(wall, &tvt[p]);
@@ -763,7 +769,8 @@ int main(int argc, char **argv)
       /* update other actors and draw all actors */
       for (c2 = data.clients; c2; c2 = c2->next) {
          if (&c2->actor != player) gameActorUpdate(&data, &c2->actor);
-         glhckObjectDraw(c2->actor.object);
+         if (glhckFrustumContainsAABB(glhckCameraGetFrustum(camera->object), glhckObjectGetAABB(c2->actor.object)))
+            glhckObjectDraw(c2->actor.object);
       }
 
       /* draw world */
@@ -803,6 +810,20 @@ int main(int argc, char **argv)
       if (fpsDelay < now) {
          if (duration > 0.0f) {
             FPS = (float)frameCounter / duration;
+            snprintf(WIN_TITLE, sizeof(WIN_TITLE)-1, "OpenGL [FPS: %d]", FPS);
+            glfwSetWindowTitle(window, WIN_TITLE);
+
+            /* update player text */
+            glhckObject *pt = glhckTextPlane(text, font, 42, WIN_TITLE, GLHCK_TEXTURE_DEFAULTS);
+            glhckObjectRemoveAllChildren(player->object);
+            if (pt) {
+               glhckObjectAddChildren(player->object, pt);
+               glhckObjectScalef(pt, 0.05f, 0.05f, 1.0f);
+               glhckObjectRotatef(pt, 0, 180, 0);
+               glhckObjectPositionf(pt, 0, 8, 0);
+               glhckObjectFree(pt);
+            }
+
             frameCounter = 0; fpsDelay = now + 1; duration = 0;
          }
       }
