@@ -31,7 +31,10 @@ typedef struct GameActor {
    float speed;
    float toRotation;
    float lastActTime;
+   float swordY;
+   char swordD;
    glhckObject *object;
+   glhckObject *sword;
    unsigned char flags, lastFlags;
    char shouldInterpolate;
 } GameActor;
@@ -79,13 +82,13 @@ static float floatInterpolate(float f, float o, float d)
    return f*inv + o*d;
 }
 
-static int closeCallback(GLFWwindow window)
+static int closeCallback(GLFWwindow* window)
 {
    RUNNING = 0;
    return 1;
 }
 
-static void resizeCallback(GLFWwindow window, int width, int height)
+static void resizeCallback(GLFWwindow* window, int width, int height)
 {
    WIDTH = width; HEIGHT = height;
    glhckDisplayResize(width, height);
@@ -462,6 +465,22 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
 #endif
    }
 
+   /* awesome attack */
+   if (actor->flags & ACTOR_ATTACK) {
+      if (!actor->sword) {
+         actor->sword = glhckObjectNew();
+         glhckObjectAddChildren(actor->object, actor->sword);
+
+         actor->swordY = 0.0f;
+         actor->swordD = !actor->swordD;
+         glhckObject *sword = glhckCubeNew(1.0f);
+         glhckObjectAddChildren(actor->sword, sword);
+         glhckObjectScalef(sword, 0.1f, 0.1f, 5.0f);
+         glhckObjectPositionf(sword, 0, 0, 8.0f);
+         glhckObjectFree(sword);
+      }
+   }
+
    /* assign last position */
    kmVec3Assign(&actor->lastPosition, &actor->position);
 
@@ -475,6 +494,23 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
    if (actor->position.y < 0.0f) actor->position.y = 0.0f;
    glhckObjectRotation(actor->object, &actor->rotation);
    glhckObjectPosition(actor->object, &actor->position);
+
+   if (actor->sword) {
+      if (!actor->swordD) {
+         glhckObjectRotationf(actor->sword, 0, cosf(actor->swordY)*140.0f, 0);
+      } else {
+         glhckObjectRotationf(actor->sword, -120.0f+sinf(actor->swordY)*140.0f, 0, 0);
+      }
+
+      if (!actor->swordD) actor->swordY += 15.0f * data->delta;
+      else actor->swordY += 8.0f * data->delta;
+      if (actor->swordY > (!actor->swordD?3.0f:1.5f)) {
+         glhckObjectRemoveAllChildren(actor->sword);
+         glhckObjectRemoveChildren(actor->object, actor->sword);
+         glhckObjectFree(actor->sword);
+         actor->sword = NULL;
+      }
+   }
 }
 
 void gameActorUpdateFrom3rdPersonCamera(ClientData *data, GameActor *actor, GameCamera *camera)
@@ -538,7 +574,7 @@ int main(int argc, char **argv)
 {
    /* global data */
    ClientData data;
-   GLFWwindow window;
+   GLFWwindow* window;
    float          now          = 0;
    float          last         = 0;
    unsigned int   frameCounter = 0;
@@ -553,10 +589,10 @@ int main(int argc, char **argv)
       return EXIT_FAILURE;
 
    glfwWindowHint(GLFW_DEPTH_BITS, 24);
-   if (!(window = glfwCreateWindow(WIDTH, HEIGHT, GLFW_WINDOWED, "srv.birth", NULL)))
+   if (!(window = glfwCreateWindow(WIDTH, HEIGHT, "srv.birth", NULL, NULL)))
       return EXIT_FAILURE;
 
-   glfwSwapInterval(0);
+   glfwSwapInterval(1);
    glfwMakeContextCurrent(window);
 
    if (!glhckInit(argc, argv))
@@ -625,7 +661,7 @@ int main(int argc, char **argv)
    float x = -parts[p].w, sx = x;
    float y = -parts[p].h+4;
    for (i = 0; i != c; ++i) {
-      cubes[i] = glhckModelNew(parts[p].file, 0.5f, 0);
+      cubes[i] = glhckModelNewEx(parts[p].file, 0.5f, 0, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
       glhckObjectPositionf(cubes[i], x, -1.0f, y);
 
       x += parts[p].w;
@@ -635,6 +671,10 @@ int main(int argc, char **argv)
       }
       p = rand() % 1;
    }
+
+   glhckObject *gate = glhckModelNewEx("media/chaosgate.obj", 2.0f, 0, GLHCK_INDEX_SHORT, GLHCK_VERTEX_V3S);
+   //glhckObjectRotatef(gate, 90, 0, 0);
+   glhckObjectPositionf(gate, -15, -1.0f, 15);
 
    glhckObject *wall = glhckCubeNew(1.0f);
    glhckObjectScalef(wall, 0.1f, 10.0f, 0.1f);
@@ -696,6 +736,9 @@ int main(int argc, char **argv)
       if (glfwGetKey(window, GLFW_KEY_SPACE)) {
          player->flags |= ACTOR_JUMP;
       }
+      if (glfwGetKey(window, GLFW_KEY_Q)) {
+         player->flags |= ACTOR_ATTACK;
+      }
 
       if (glfwGetKey(window, GLFW_KEY_B)) {
          bot = !bot;
@@ -704,6 +747,7 @@ int main(int argc, char **argv)
       /* bot mode */
       if (bot) {
          player->flags |= ACTOR_FORWARD;
+         player->flags |= ACTOR_ATTACK;
          camera->flags |= botFlags;
          if (botTime < now) {
             botFlags = 0;
@@ -719,6 +763,7 @@ int main(int argc, char **argv)
       int lcol = col; col = 0; p;
       Client *c2;
 
+#if 0
       /* visualize */
       for (i = 0; i != c; ++i) {
          glhckObject *floor = glhckObjectChildren(cubes[i], NULL)[1];
@@ -763,6 +808,7 @@ int main(int argc, char **argv)
             kmVec3Assign(&c2->actor.toPosition, &c2->actor.lastPosition);
          }
       }
+#endif
 
       /* update me */
       gameCameraUpdate(&data, camera, player);
@@ -773,14 +819,16 @@ int main(int argc, char **argv)
          glhckObjectPosition(playerText, &player->position);
          glhckObjectMovef(playerText, 0, 8, 0);
          glhckObjectTarget(playerText, &camera->position);
-         glhckObjectDraw(playerText);
+//         glhckObjectDraw(playerText);
       }
+
+      glhckObjectDraw(gate);
 
       /* update other actors and draw all actors */
       for (c2 = data.clients; c2; c2 = c2->next) {
          if (&c2->actor != player) gameActorUpdate(&data, &c2->actor);
-         if (glhckFrustumContainsAABB(glhckCameraGetFrustum(camera->object), glhckObjectGetAABB(c2->actor.object)))
-            glhckObjectDraw(c2->actor.object);
+         if (c2->actor.sword) glhckObjectDraw(c2->actor.sword);
+         glhckObjectDraw(c2->actor.object);
       }
 
       /* draw world */
