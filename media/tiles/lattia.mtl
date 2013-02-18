@@ -1,0 +1,14 @@
+# Blender MTL File: 'None'
+# Material Count: 1
+
+newmtl 01___Default
+Ns 7.843137
+Ka 0.000000 0.000000 0.000000
+Kd 0.470560 0.470560 0.470560
+Ks 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /mnt/storage/dev/3d/Models/srv.birth/kaytava1.png
+map_Ka /mnt/storage/dev/3d/Models/srv.birth/kaytava1.png
+map_d /mnt/storage/dev/3d/Models/srv.birth/kaytava1.png
