@@ -491,7 +491,7 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.1f);
    }
 
-   if (actor->position.y < 0.0f) actor->position.y = 0.0f;
+   if (actor->position.y < 2.5f) actor->position.y = 2.5f;
    glhckObjectRotation(actor->object, &actor->rotation);
    glhckObjectPosition(actor->object, &actor->position);
 
@@ -588,21 +588,24 @@ int main(int argc, char **argv)
    if (!glfwInit())
       return EXIT_FAILURE;
 
+   glfwWindowHint(GLFW_SAMPLES, 4);
    glfwWindowHint(GLFW_DEPTH_BITS, 24);
    if (!(window = glfwCreateWindow(WIDTH, HEIGHT, "srv.birth", NULL, NULL)))
       return EXIT_FAILURE;
 
-   glfwSwapInterval(1);
    glfwMakeContextCurrent(window);
 
    if (!glhckInit(argc, argv))
       return EXIT_FAILURE;
 
-   if (!glhckDisplayCreate(WIDTH, HEIGHT, GLHCK_RENDER_AUTO))
+   if (!glhckDisplayCreate(WIDTH, HEIGHT, GLHCK_RENDER_OPENGL))
       return EXIT_FAILURE;
 
    if (initEnet("localhost", 1234, &data) != RETURN_OK)
       return EXIT_FAILURE;
+
+   glfwSwapInterval(0);
+   glEnable(GL_MULTISAMPLE);
 
    glhckText *text = glhckTextNew(512, 512);
    glhckTextColor(text, 255, 255, 255, 255);
@@ -629,52 +632,59 @@ int main(int argc, char **argv)
       float w, h;
    } DungeonPart;
 
-   DungeonPart parts[8];
-   parts[0].file = "media/cave_01.x";
-   parts[0].w = 63.2f;
-   parts[0].h = 72.4f;
-   parts[1].file = "media/cave_02.x";
+   DungeonPart parts[4];
+   parts[0].file = "media/tiles/lattia.obj";
+   parts[0].w = 0.0f;
+   parts[0].h = 24.0f;
+   parts[1].file = "media/tiles/lattia_kulma.obj";
    parts[1].w = 100.0f;
    parts[1].h = 100.0f;
-   parts[2].file = "media/cave_03.x";
-   parts[2].w = 67.3f;
-   parts[2].h = 67.3f;
-   parts[3].file = "media/cave_04.x";
-   parts[3].w = 63.0f;
-   parts[3].h = 72.0f;
-   parts[4].file = "media/cave_05.x";
-   parts[4].w = 100.0f;
-   parts[4].h = 100.0f;
-   parts[5].file = "media/cave_06.x";
-   parts[5].w = 100.0f;
-   parts[5].h = 100.0f;
-   parts[6].file = "media/cave_09.x";
-   parts[6].w = 100.0f;
-   parts[6].h = 100.0f;
-   parts[7].file = "media/cave_10.x";
-   parts[7].w = 100.0f;
-   parts[7].h = 100.0f;
+   parts[2].file = "media/tiles/seina.obj";
+   parts[2].w = 0.0f;
+   parts[2].h = 24.0f;
+   parts[3].file = "media/tiles/seina_kulma.obj";
+   parts[3].w = 67.3f;
+   parts[3].h = 67.3f;
 
-   unsigned int i, c = 20;
-   glhckObject *cubes[c];
-   unsigned int p = rand() % 1;
+   unsigned int i, c = 15;
+   glhckObject *cubes[c*2];
+   unsigned int p = 2;
    float x = -parts[p].w, sx = x;
-   float y = -parts[p].h+4;
-   for (i = 0; i != c; ++i) {
-      cubes[i] = glhckModelNewEx(parts[p].file, 0.5f, 0, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
+   float y = -parts[p].h, sy = y;
+   int flip = 1;
+   for (i = 0; i != 10; ++i) {
+      cubes[i] = glhckModelNewEx(parts[p].file, 0.3f, 0, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
       glhckObjectPositionf(cubes[i], x, -1.0f, y);
+      if (flip) glhckObjectRotationf(cubes[i], 0, 180.0f, 0);
 
-      x += parts[p].w;
+      y += parts[p].h;
       if ((i+1) % 5 == 0) {
-         x = sx;
-         y += parts[p].h;
+         y = sy;
+         x += parts[p].w;
+         flip = !flip;
       }
-      p = rand() % 1;
    }
 
-   glhckObject *gate = glhckModelNewEx("media/chaosgate.obj", 2.0f, 0, GLHCK_INDEX_SHORT, GLHCK_VERTEX_V3S);
-   //glhckObjectRotatef(gate, 90, 0, 0);
-   glhckObjectPositionf(gate, -15, -1.0f, 15);
+   p = 0;
+   x = -parts[p].w, sx = x;
+   y = -parts[p].h, sy = y;
+   flip = 1;
+   for (i = 10; i != c; ++i) {
+      cubes[i] = glhckModelNewEx(parts[p].file, 0.3f, 0, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
+      glhckObjectPositionf(cubes[i], x, -1.0f, y);
+      if (flip) glhckObjectRotationf(cubes[i], 0, 180.0f, 0);
+
+      y += parts[p].h;
+      if ((i+1) % 5 == 0) {
+         y = sy;
+         x += parts[p].w;
+         flip = !flip;
+      }
+   }
+
+   glhckObject *gate = glhckModelNewEx("media/chaosgate/chaosgate.obj", 1.8f, 0, GLHCK_INDEX_SHORT, GLHCK_VERTEX_V3S);
+   glhckObjectRotatef(gate, 0, 35.0f, 0);
+   glhckObjectPositionf(gate, 3.0f, 1.5f, 0);
 
    glhckObject *wall = glhckCubeNew(1.0f);
    glhckObjectScalef(wall, 0.1f, 10.0f, 0.1f);
@@ -682,6 +692,38 @@ int main(int argc, char **argv)
 
    glfwSetWindowCloseCallback(window, closeCallback);
    glfwSetWindowSizeCallback(window, resizeCallback);
+
+#if 0
+   glhckShader *shader = glhckShaderNew(NULL, "VSM.GLhck.Lighting.ShadowMapping.Unpacking.Fragment", NULL);
+   glhckShader *depthShader = glhckShaderNew(NULL, "VSM.GLhck.Depth.Packing.Fragment", NULL);
+   glhckShader *depthRenderShader = glhckShaderNew(NULL, "VSM.GLhck.DepthRender.Unpacking.Fragment", NULL);
+   glhckShaderSetUniform(shader, "ShadowMap", 1, &((int[]){1}));
+
+   int sW = 128, sH = 128;
+   glhckRenderbuffer *depthBuffer = glhckRenderbufferNew(sW, sH, GLHCK_DEPTH_COMPONENT);
+   glhckTexture *depthColorMap = glhckTextureNew(NULL, 0);
+   glhckTextureCreate(depthColorMap, GLHCK_TEXTURE_2D, NULL, sW, sH, 0, GLHCK_RGBA, GLHCK_RGBA, 0);
+   glhckFramebuffer *fbo = glhckFramebufferNew(GLHCK_FRAMEBUFFER);
+   glhckFramebufferAttachRenderbuffer(fbo, depthBuffer, GLHCK_DEPTH_ATTACHMENT);
+   glhckFramebufferAttachTexture(fbo, depthColorMap, GLHCK_COLOR_ATTACHMENT0);
+   glhckFramebufferRecti(fbo, 0, 0, sW, sH);
+
+   glhckObject *screen = glhckSpriteNew(depthColorMap, 128, 128);
+   glhckObjectShader(screen, depthRenderShader);
+   glhckObjectMaterialFlags(screen, 0);
+#endif
+
+   int li, numLights = 3;
+   glhckLight *light[numLights];
+   for (li = 0; li != numLights; ++li) {
+      light[li] = glhckLightNew();
+      glhckLightAttenf(light[li], 0.1f, 0.1f, 0.04f);
+      glhckLightCutoutf(light[li], 45.0f, 0.0f);
+      glhckLightPointLightFactor(light[li], 0.1f);
+      glhckLightColorb(light[li], 155, 155, 255, 255);
+      glhckObjectPositionf(glhckLightGetObject(light[li]), 3.0f, 48.0f, -80.0f + li * 70.0f);
+      glhckObjectTargetf(glhckLightGetObject(light[li]), -3.0f, 0.0f, -80.0f + li * 70.0f);
+   }
 
    int bot = 0, ac;
    for (ac = 0; ac != argc; ++ac)
@@ -814,37 +856,89 @@ int main(int argc, char **argv)
       gameCameraUpdate(&data, camera, player);
       gameActorUpdateFrom3rdPersonCamera(&data, player, camera);
 
-      /* player text */
-      if (playerText) {
-         glhckObjectPosition(playerText, &player->position);
-         glhckObjectMovef(playerText, 0, 8, 0);
-         glhckObjectTarget(playerText, &camera->position);
-//         glhckObjectDraw(playerText);
-      }
-
-      glhckObjectDraw(gate);
-
-      /* update other actors and draw all actors */
       for (c2 = data.clients; c2; c2 = c2->next) {
          if (&c2->actor != player) gameActorUpdate(&data, &c2->actor);
-         if (c2->actor.sword) glhckObjectDraw(c2->actor.sword);
-         glhckObjectDraw(c2->actor.object);
       }
 
-      /* draw world */
-      for (i = 0; i != c; ++i) {
-         glhckObjectDraw(cubes[i]);
-      }
-
-      /* render */
       glhckCameraUpdate(camera->object);
-      glhckRender();
+      for (li = 0; li != numLights; ++li) {
+#if 0
+         glhckBlendFunc(GLHCK_ZERO, GLHCK_ZERO);
+         glhckRenderPassShader(depthShader);
+
+         for (i = 0; i != c; ++i) {
+            glhckObjectDraw(cubes[i]);
+         }
+
+         glhckObjectDraw(gate);
+
+         /* draw all actors */
+         for (c2 = data.clients; c2; c2 = c2->next) {
+            if (c2->actor.sword) glhckObjectDraw(c2->actor.sword);
+            glhckObjectDraw(c2->actor.object);
+         }
+
+         glhckLightBeginProjectionWithCamera(light[li], camera->object);
+         glhckLightBind(light[li]);
+         glhckFramebufferBegin(fbo);
+         glhckClear(GLHCK_DEPTH_BUFFER | GLHCK_COLOR_BUFFER);
+         glhckRender();
+         glhckFramebufferEnd(fbo);
+         glhckLightEndProjectionWithCamera(light[li], camera->object);
+
+         glActiveTexture(GL_TEXTURE1);
+         glhckTextureBind(depthColorMap);
+         glActiveTexture(GL_TEXTURE0);
+
+         glhckRenderPassFlags(GLHCK_PASS_DEFAULTS);
+         glhckRenderPassShader(shader);
+#else
+         glhckLightBeginProjectionWithCamera(light[li], camera->object);
+         glhckLightBind(light[li]);
+         glhckLightEndProjectionWithCamera(light[li], camera->object);
+#endif
+
+         /* player text */
+         if (playerText) {
+            glhckObjectPosition(playerText, &player->position);
+            glhckObjectMovef(playerText, 0, 8, 0);
+            glhckObjectTarget(playerText, &camera->position);
+            //glhckObjectDraw(playerText);
+         }
+
+         /* draw world */
+         for (i = 0; i != c; ++i) {
+            glhckObjectDraw(cubes[i]);
+         }
+
+         glhckObjectDraw(gate);
+
+         /* draw all actors */
+         for (c2 = data.clients; c2; c2 = c2->next) {
+            if (c2->actor.sword) glhckObjectDraw(c2->actor.sword);
+            glhckObjectDraw(c2->actor.object);
+         }
+
+         /* render */
+         if (li) glhckBlendFunc(GLHCK_ONE, GLHCK_ONE);
+         glhckRender();
+      }
+      glhckBlendFunc(GLHCK_ZERO, GLHCK_ZERO);
+      glhckRenderPassShader(NULL);
+
+#if 0
+      kmMat4 mat2d;
+      kmMat4Scaling(&mat2d, -2.0f/WIDTH, 2.0f/HEIGHT, 0.0f);
+      glhckRenderProjection(&mat2d);
+      glhckObjectPositionf(screen, WIDTH/2.0f-128.0f/2.0f, HEIGHT/2.0f-128.0f/2.0f, 0);
+      glhckObjectRender(screen);
+#endif
 
       glhckTextDraw(text, font, 18, 0,  HEIGHT-4, WIN_TITLE, NULL);
       glhckTextRender(text);
 
       glfwSwapBuffers(window);
-      glhckClear();
+      glhckClear(GLHCK_DEPTH_BUFFER | GLHCK_COLOR_BUFFER);
 
       /* manage packets */
       manageEnet(&data);
