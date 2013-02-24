@@ -245,7 +245,7 @@ static void handleJoin(ClientData *data, ENetEvent *event)
    PacketServerClientInformation *packet = (PacketServerClientInformation*)event->packet->data;
 
    memset(&client, 0, sizeof(Client));
-   client.actor.object = glhckCubeNew(1);
+   client.actor.object = glhckCubeNew(1.0f);
    client.actor.speed  = data->me->actor.speed;
    strncpy(client.host, packet->host, sizeof(client.host));
    client.clientId = packet->clientId;
@@ -595,7 +595,7 @@ int main(int argc, char **argv)
 
    glfwMakeContextCurrent(window);
 
-   if (!glhckInit(argc, argv))
+   if (!glhckContextCreate(argc, argv))
       return EXIT_FAILURE;
 
    if (!glhckDisplayCreate(WIDTH, HEIGHT, GLHCK_RENDER_OPENGL))
@@ -620,10 +620,10 @@ int main(int argc, char **argv)
    kmVec3Fill(&camera->offset, 0.0f, 5.0f, 0.0f);
    glhckCameraRange(camera->object, 1.0f, 500.0f);
 
-   glhckObject *playerText = glhckTextPlane(text, font, 42, "Player", GLHCK_TEXTURE_DEFAULTS);
+   glhckObject *playerText = glhckTextPlane(text, font, 42, "Player", NULL);
    if (playerText) glhckObjectScalef(playerText, 0.05f, 0.05f, 1.0f);
    GameActor *player = &data.me->actor;
-   player->object = glhckCubeNew(1);
+   player->object = glhckCubeNew(1.0f);
    player->speed  = 20;
    glhckObjectColorb(player->object, 255, 0, 0, 255);
 
@@ -693,36 +693,16 @@ int main(int argc, char **argv)
    glfwSetWindowCloseCallback(window, closeCallback);
    glfwSetWindowSizeCallback(window, resizeCallback);
 
-#if 0
-   glhckShader *shader = glhckShaderNew(NULL, "VSM.GLhck.Lighting.ShadowMapping.Unpacking.Fragment", NULL);
-   glhckShader *depthShader = glhckShaderNew(NULL, "VSM.GLhck.Depth.Packing.Fragment", NULL);
-   glhckShader *depthRenderShader = glhckShaderNew(NULL, "VSM.GLhck.DepthRender.Unpacking.Fragment", NULL);
-   glhckShaderSetUniform(shader, "ShadowMap", 1, &((int[]){1}));
-
-   int sW = 128, sH = 128;
-   glhckRenderbuffer *depthBuffer = glhckRenderbufferNew(sW, sH, GLHCK_DEPTH_COMPONENT);
-   glhckTexture *depthColorMap = glhckTextureNew(NULL, 0);
-   glhckTextureCreate(depthColorMap, GLHCK_TEXTURE_2D, NULL, sW, sH, 0, GLHCK_RGBA, GLHCK_RGBA, 0);
-   glhckFramebuffer *fbo = glhckFramebufferNew(GLHCK_FRAMEBUFFER);
-   glhckFramebufferAttachRenderbuffer(fbo, depthBuffer, GLHCK_DEPTH_ATTACHMENT);
-   glhckFramebufferAttachTexture(fbo, depthColorMap, GLHCK_COLOR_ATTACHMENT0);
-   glhckFramebufferRecti(fbo, 0, 0, sW, sH);
-
-   glhckObject *screen = glhckSpriteNew(depthColorMap, 128, 128);
-   glhckObjectShader(screen, depthRenderShader);
-   glhckObjectMaterialFlags(screen, 0);
-#endif
-
-   int li, numLights = 3;
+   int li, numLights = 1;
    glhckLight *light[numLights];
    for (li = 0; li != numLights; ++li) {
       light[li] = glhckLightNew();
-      glhckLightAttenf(light[li], 0.1f, 0.1f, 0.04f);
+      glhckLightAttenf(light[li], 0.0f, 0.0f, 0.0025f);
       glhckLightCutoutf(light[li], 45.0f, 0.0f);
-      glhckLightPointLightFactor(light[li], 0.1f);
+      glhckLightPointLightFactor(light[li], 0.4f);
       glhckLightColorb(light[li], 155, 155, 255, 255);
-      glhckObjectPositionf(glhckLightGetObject(light[li]), 3.0f, 48.0f, -80.0f + li * 70.0f);
-      glhckObjectTargetf(glhckLightGetObject(light[li]), -3.0f, 0.0f, -80.0f + li * 70.0f);
+      glhckObjectPositionf(glhckLightGetObject(light[li]), 0.0f, 130.0f, 25.0f);
+      glhckObjectTargetf(glhckLightGetObject(light[li]), 0.0f, -80.0f, 25.0f);
    }
 
    int bot = 0, ac;
@@ -862,41 +842,9 @@ int main(int argc, char **argv)
 
       glhckCameraUpdate(camera->object);
       for (li = 0; li != numLights; ++li) {
-#if 0
-         glhckBlendFunc(GLHCK_ZERO, GLHCK_ZERO);
-         glhckRenderPassShader(depthShader);
-
-         for (i = 0; i != c; ++i) {
-            glhckObjectDraw(cubes[i]);
-         }
-
-         glhckObjectDraw(gate);
-
-         /* draw all actors */
-         for (c2 = data.clients; c2; c2 = c2->next) {
-            if (c2->actor.sword) glhckObjectDraw(c2->actor.sword);
-            glhckObjectDraw(c2->actor.object);
-         }
-
-         glhckLightBeginProjectionWithCamera(light[li], camera->object);
-         glhckLightBind(light[li]);
-         glhckFramebufferBegin(fbo);
-         glhckClear(GLHCK_DEPTH_BUFFER | GLHCK_COLOR_BUFFER);
-         glhckRender();
-         glhckFramebufferEnd(fbo);
-         glhckLightEndProjectionWithCamera(light[li], camera->object);
-
-         glActiveTexture(GL_TEXTURE1);
-         glhckTextureBind(depthColorMap);
-         glActiveTexture(GL_TEXTURE0);
-
-         glhckRenderPassFlags(GLHCK_PASS_DEFAULTS);
-         glhckRenderPassShader(shader);
-#else
          glhckLightBeginProjectionWithCamera(light[li], camera->object);
          glhckLightBind(light[li]);
          glhckLightEndProjectionWithCamera(light[li], camera->object);
-#endif
 
          /* player text */
          if (playerText) {
@@ -920,25 +868,16 @@ int main(int argc, char **argv)
          }
 
          /* render */
-         if (li) glhckBlendFunc(GLHCK_ONE, GLHCK_ONE);
+         if (li) glhckRenderBlendFunc(GLHCK_ONE, GLHCK_ONE);
          glhckRender();
       }
-      glhckBlendFunc(GLHCK_ZERO, GLHCK_ZERO);
-      glhckRenderPassShader(NULL);
-
-#if 0
-      kmMat4 mat2d;
-      kmMat4Scaling(&mat2d, -2.0f/WIDTH, 2.0f/HEIGHT, 0.0f);
-      glhckRenderProjection(&mat2d);
-      glhckObjectPositionf(screen, WIDTH/2.0f-128.0f/2.0f, HEIGHT/2.0f-128.0f/2.0f, 0);
-      glhckObjectRender(screen);
-#endif
+      glhckRenderBlendFunc(GLHCK_ZERO, GLHCK_ZERO);
 
       glhckTextDraw(text, font, 18, 0,  HEIGHT-4, WIN_TITLE, NULL);
       glhckTextRender(text);
 
       glfwSwapBuffers(window);
-      glhckClear(GLHCK_DEPTH_BUFFER | GLHCK_COLOR_BUFFER);
+      glhckRenderClear(GLHCK_DEPTH_BUFFER | GLHCK_COLOR_BUFFER);
 
       /* manage packets */
       manageEnet(&data);
@@ -977,7 +916,7 @@ int main(int argc, char **argv)
    }
 
    deinitEnet(&data);
-   glhckTerminate();
+   glhckContextTerminate();
    glfwTerminate();
    return EXIT_SUCCESS;
 }
