@@ -82,10 +82,9 @@ static float floatInterpolate(float f, float o, float d)
    return f*inv + o*d;
 }
 
-static int closeCallback(GLFWwindow* window)
+static void closeCallback(GLFWwindow* window)
 {
    RUNNING = 0;
-   return 1;
 }
 
 static void resizeCallback(GLFWwindow* window, int width, int height)
@@ -469,12 +468,12 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
    if (actor->flags & ACTOR_ATTACK) {
       if (!actor->sword) {
          actor->sword = glhckObjectNew();
-         glhckObjectAddChildren(actor->object, actor->sword);
+         glhckObjectAddChild(actor->object, actor->sword);
 
          actor->swordY = 0.0f;
          actor->swordD = !actor->swordD;
          glhckObject *sword = glhckCubeNew(1.0f);
-         glhckObjectAddChildren(actor->sword, sword);
+         glhckObjectAddChild(actor->sword, sword);
          glhckObjectScalef(sword, 0.1f, 0.1f, 5.0f);
          glhckObjectPositionf(sword, 0, 0, 8.0f);
          glhckObjectFree(sword);
@@ -505,8 +504,8 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       if (!actor->swordD) actor->swordY += 15.0f * data->delta;
       else actor->swordY += 8.0f * data->delta;
       if (actor->swordY > (!actor->swordD?3.0f:1.5f)) {
-         glhckObjectRemoveAllChildren(actor->sword);
-         glhckObjectRemoveChildren(actor->object, actor->sword);
+         glhckObjectRemoveChildren(actor->sword);
+         glhckObjectRemoveChild(actor->object, actor->sword);
          glhckObjectFree(actor->sword);
          actor->sword = NULL;
       }
@@ -653,7 +652,7 @@ int main(int argc, char **argv)
    float y = -parts[p].h, sy = y;
    int flip = 1;
    for (i = 0; i != 10; ++i) {
-      cubes[i] = glhckModelNewEx(parts[p].file, 0.3f, 0, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
+      cubes[i] = glhckModelNewEx(parts[p].file, 0.3f, NULL, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
       glhckObjectPositionf(cubes[i], x, -1.0f, y);
       if (flip) glhckObjectRotationf(cubes[i], 0, 180.0f, 0);
 
@@ -670,7 +669,7 @@ int main(int argc, char **argv)
    y = -parts[p].h, sy = y;
    flip = 1;
    for (i = 10; i != c; ++i) {
-      cubes[i] = glhckModelNewEx(parts[p].file, 0.3f, 0, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
+      cubes[i] = glhckModelNewEx(parts[p].file, 0.3f, NULL, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
       glhckObjectPositionf(cubes[i], x, -1.0f, y);
       if (flip) glhckObjectRotationf(cubes[i], 0, 180.0f, 0);
 
@@ -682,7 +681,7 @@ int main(int argc, char **argv)
       }
    }
 
-   glhckObject *gate = glhckModelNewEx("media/chaosgate/chaosgate.obj", 1.8f, 0, GLHCK_INDEX_SHORT, GLHCK_VERTEX_V3S);
+   glhckObject *gate = glhckModelNewEx("media/chaosgate/chaosgate.obj", 1.8f, NULL, GLHCK_INDEX_SHORT, GLHCK_VERTEX_V3S);
    glhckObjectRotatef(gate, 0, 35.0f, 0);
    glhckObjectPositionf(gate, 3.0f, 1.5f, 0);
 
@@ -873,8 +872,9 @@ int main(int argc, char **argv)
       }
       glhckRenderBlendFunc(GLHCK_ZERO, GLHCK_ZERO);
 
-      glhckTextDraw(text, font, 18, 0,  HEIGHT-4, WIN_TITLE, NULL);
+      glhckTextStash(text, font, 18, 0,  HEIGHT-4, WIN_TITLE, NULL);
       glhckTextRender(text);
+      glhckTextClear(text);
 
       glfwSwapBuffers(window);
       glhckRenderClear(GLHCK_DEPTH_BUFFER | GLHCK_COLOR_BUFFER);
