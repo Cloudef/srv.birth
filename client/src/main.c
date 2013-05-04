@@ -58,6 +58,12 @@ typedef struct Client {
    struct Client *next;
 } Client;
 
+typedef struct ClientMaterials {
+   glhckMaterial *me;
+   glhckMaterial *player;
+   glhckMaterial *wall;
+} ClientMaterials;
+
 typedef struct ClientData {
    GameCamera camera;
    float delta;
@@ -65,6 +71,7 @@ typedef struct ClientData {
    ENetPeer *peer;
    Client *me;
    Client *clients;
+   ClientMaterials materials;
 } ClientData;
 
 static inline kmVec3* kmVec3Interpolate(kmVec3* pOut, const kmVec3* pIn, const kmVec3* other, float d)
@@ -248,7 +255,8 @@ static void handleJoin(ClientData *data, ENetEvent *event)
    client.actor.speed  = data->me->actor.speed;
    strncpy(client.host, packet->host, sizeof(client.host));
    client.clientId = packet->clientId;
-   glhckObjectColorb(client.actor.object, 0, 255, 0, 255);
+
+   glhckObjectMaterial(client.actor.object, data->materials.player);
    gameNewClient(data, &client);
    printf("Client [%u] (%s) joined!\n", client.clientId, client.host);
 }
@@ -606,6 +614,13 @@ int main(int argc, char **argv)
    glfwSwapInterval(0);
    glEnable(GL_MULTISAMPLE);
 
+   data.materials.me = glhckMaterialNew(NULL);
+   data.materials.player = glhckMaterialNew(NULL);
+   data.materials.wall = glhckMaterialNew(NULL);
+   glhckMaterialDiffuseb(data.materials.me, 255, 0, 0, 255);
+   glhckMaterialDiffuseb(data.materials.player, 0, 255, 0, 255);
+   glhckMaterialDiffuseb(data.materials.wall, 0, 255, 0, 255);
+
    glhckText *text = glhckTextNew(512, 512);
    glhckTextColor(text, 255, 255, 255, 255);
    unsigned int font = glhckTextNewFont(text, "media/DejaVuSans.ttf");
@@ -624,7 +639,7 @@ int main(int argc, char **argv)
    GameActor *player = &data.me->actor;
    player->object = glhckCubeNew(1.0f);
    player->speed  = 20;
-   glhckObjectColorb(player->object, 255, 0, 0, 255);
+   glhckObjectMaterial(player->object, data.materials.me);
 
    typedef struct DungeonPart {
       char *file;
@@ -687,7 +702,7 @@ int main(int argc, char **argv)
 
    glhckObject *wall = glhckCubeNew(1.0f);
    glhckObjectScalef(wall, 0.1f, 10.0f, 0.1f);
-   glhckObjectColorb(wall, 0, 255, 0, 255);
+   glhckObjectMaterial(wall, data.materials.wall);
 
    glfwSetWindowCloseCallback(window, closeCallback);
    glfwSetWindowSizeCallback(window, resizeCallback);
