@@ -74,6 +74,9 @@ typedef struct ClientData {
    ClientMaterials materials;
 } ClientData;
 
+static glhckObject *wall = NULL;
+static glhckObject *town = NULL;
+
 static inline kmVec3* kmVec3Interpolate(kmVec3* pOut, const kmVec3* pIn, const kmVec3* other, float d)
 {
    const float inv = 1.0f - d;
@@ -444,7 +447,7 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
 
    if (actor->flags & ACTOR_JUMP) {
       actor->toPosition.y += speed;
-   } else if (actor->toPosition.y > 0.0f) {
+   } else {
       actor->toPosition.y -= speed;
    }
 
@@ -498,9 +501,14 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.1f);
    }
 
-   if (actor->position.y < 2.5f) actor->position.y = 2.5f;
+   if (actor->position.y < 0.0) actor->position.y = 0.0;
+   if (actor->toPosition.y < 0.0) actor->toPosition.y = -0.0;
    glhckObjectRotation(actor->object, &actor->rotation);
    glhckObjectPosition(actor->object, &actor->position);
+
+   kmVec3 colNormal;
+   if (objectContainsObject(town, actor->object, &colNormal))
+      kmVec3Subtract(&actor->toPosition, &actor->lastPosition, &colNormal);
 
    if (actor->sword) {
       if (!actor->swordD) {
@@ -563,18 +571,237 @@ void gameSendFullPlayerState(ClientData *data)
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorFullState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 }
 
-float sign(const kmVec3 *p1, const kmVec3 *p2, const kmVec3 *p3)
+typedef struct triangle {
+   kmVec3 v1, v2, v3;
+} triangle;
+
+static int axisTest13_13_23(const triangle *tri, const kmVec3 *edge, const kmVec3 *abs, const kmVec3 *boxHalf)
 {
-   return (p1->x - p3->x) * (p2->z - p3->z) - (p2->x - p3->x) * (p1->z - p3->z);
+   float p1, p2, max, min, rad;
+
+   p1 = edge->z*tri->v1.y - edge->y*tri->v1.z;
+   p2 = edge->z*tri->v3.y - edge->y*tri->v3.z;
+   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
+   rad = abs->z * boxHalf->y + abs->y * boxHalf->z;
+   if (min > rad || max < -rad) return 0;
+
+   p1 = -edge->z*tri->v1.x + edge->x*tri->v1.z;
+   p2 = -edge->z*tri->v3.x + edge->x*tri->v3.z;
+   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
+   rad = abs->z * boxHalf->x + abs->x * boxHalf->z;
+   if (min > rad || max < -rad) return 0;
+
+   p1 = edge->y*tri->v2.x + edge->x*tri->v2.y;
+   p2 = edge->y*tri->v3.x + edge->x*tri->v3.y;
+   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
+   rad = abs->y * boxHalf->x + abs->x * boxHalf->y;
+   if (min > rad || max < -rad) return 0;
+
+   return 1;
 }
 
-int PointInTriangle(const kmVec3 *pt, const kmVec3 *v1, const kmVec3 *v2, const kmVec3 *v3)
+static int axisTest13_13_12(const triangle *tri, const kmVec3 *edge, const kmVec3 *abs, const kmVec3 *boxHalf)
 {
-   int b1, b2, b3;
-   b1 = sign(pt, v1, v2) < 0.0f;
-   b2 = sign(pt, v2, v3) < 0.0f;
-   b3 = sign(pt, v3, v1) < 0.0f;
-   return ((b1 == b2) && (b2 == b3));
+   float p1, p2, max, min, rad;
+
+   p1 = edge->z*tri->v1.y - edge->y*tri->v1.z;
+   p2 = edge->z*tri->v3.y - edge->y*tri->v3.z;
+   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
+   rad = abs->z * boxHalf->y + abs->y * boxHalf->z;
+   if (min > rad || max < -rad) return 0;
+
+   p1 = -edge->z*tri->v1.x + edge->x*tri->v1.z;
+   p2 = -edge->z*tri->v3.x + edge->x*tri->v3.z;
+   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
+   rad = abs->z * boxHalf->x + abs->x * boxHalf->z;
+   if (min > rad || max < -rad) return 0;
+
+   p1 = edge->y*tri->v1.x + edge->x*tri->v1.y;
+   p2 = edge->y*tri->v2.x + edge->x*tri->v2.y;
+   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
+   rad = abs->y * boxHalf->x + abs->x * boxHalf->y;
+   if (min > rad || max < -rad) return 0;
+
+   return 1;
+}
+
+static int axisTest12_12_23(const triangle *tri, const kmVec3 *edge, const kmVec3 *abs, const kmVec3 *boxHalf)
+{
+   float p1, p2, max, min, rad;
+
+   p1 = edge->z*tri->v1.y - edge->y*tri->v1.z;
+   p2 = edge->z*tri->v2.y - edge->y*tri->v2.z;
+   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
+   rad = abs->z * boxHalf->y + abs->y * boxHalf->z;
+   if (min > rad || max < -rad) return 0;
+
+   p1 = -edge->z*tri->v1.x + edge->x*tri->v1.z;
+   p2 = -edge->z*tri->v2.x + edge->x*tri->v2.z;
+   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
+   rad = abs->z * boxHalf->x + abs->x * boxHalf->z;
+   if (min > rad || max < -rad) return 0;
+
+   p1 = edge->y*tri->v2.x + edge->x*tri->v2.y;
+   p2 = edge->y*tri->v3.x + edge->x*tri->v3.y;
+   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
+   rad = abs->y * boxHalf->x + abs->x * boxHalf->y;
+   if (min > rad || max < -rad) return 0;
+
+   return 1;
+}
+
+/* assign the max units from vectors to v1 */
+#define maxV2(v1, v2) \
+   if ((v1)->x < (v2)->x) (v1)->x = (v2)->x; \
+   if ((v1)->y < (v2)->y) (v1)->y = (v2)->y
+#define maxV3(v1, v2) \
+   maxV2(v1, v2);     \
+   if ((v1)->z < (v2)->z) (v1)->z = (v2)->z
+
+/* assign the min units from vectors to v1 */
+#define minV2(v1, v2) \
+   if ((v1)->x > (v2)->x) (v1)->x = (v2)->x; \
+   if ((v1)->y > (v2)->y) (v1)->y = (v2)->y
+#define minV3(v1, v2) \
+   minV2(v1, v2);     \
+   if ((v1)->z > (v2)->z) (v1)->z = (v2)->z
+
+int triangleIntersectsAABB(const triangle *a, const kmAABB *b, kmVec3 *colNormal)
+{
+   kmVec3 center, absVec, normal, boxHalf, min, max;
+   triangle tri, edge;
+
+   kmAABBCentre(b, &center);
+   boxHalf.x = kmAABBDiameterX(b)*0.5;
+   boxHalf.y = kmAABBDiameterY(b)*0.5;
+   boxHalf.z = kmAABBDiameterZ(b)*0.5;
+
+   kmVec3Subtract(&tri.v1, &a->v1, &center);
+   kmVec3Subtract(&tri.v2, &a->v2, &center);
+   kmVec3Subtract(&tri.v3, &a->v3, &center);
+
+   kmVec3Subtract(&edge.v1, &tri.v2, &tri.v1);
+   kmVec3Subtract(&edge.v2, &tri.v3, &tri.v2);
+   kmVec3Subtract(&edge.v3, &tri.v1, &tri.v3);
+
+   absVec.x = fabsf(edge.v1.x);
+   absVec.y = fabsf(edge.v1.y);
+   absVec.z = fabsf(edge.v1.z);
+   if (!axisTest13_13_23(&tri, &edge.v1, &absVec, &boxHalf)) return 0;
+
+   absVec.x = fabsf(edge.v2.x);
+   absVec.y = fabsf(edge.v2.y);
+   absVec.z = fabsf(edge.v2.z);
+   if (!axisTest13_13_12(&tri, &edge.v2, &absVec, &boxHalf)) return 0;
+
+   absVec.x = fabsf(edge.v3.x);
+   absVec.y = fabsf(edge.v3.y);
+   absVec.z = fabsf(edge.v3.z);
+   if (!axisTest12_12_23(&tri, &edge.v3, &absVec, &boxHalf)) return 0;
+
+   memcpy(&max, &tri.v1, sizeof(kmVec3));
+   memcpy(&min, &tri.v1, sizeof(kmVec3));
+   maxV3(&max, &tri.v2);
+   minV3(&min, &tri.v2);
+   maxV3(&max, &tri.v3);
+   minV3(&min, &tri.v3);
+
+   if (min.x > boxHalf.x || max.x < -boxHalf.x) return 0;
+   if (min.y > boxHalf.y || max.y < -boxHalf.y) return 0;
+   if (min.z > boxHalf.z || max.z < -boxHalf.z) return 0;
+
+   kmVec3Cross(&normal, &edge.v1, &edge.v2);
+   if (normal.x > 0.0f) {
+      min.x = -boxHalf.x - tri.v1.x;
+      max.x =  boxHalf.x - tri.v1.x;
+   } else {
+      min.x =  boxHalf.x - tri.v1.x;
+      max.x = -boxHalf.x - tri.v1.x;
+   }
+
+   if (normal.y > 0.0f) {
+      min.y = -boxHalf.y - tri.v1.y;
+      max.y =  boxHalf.y - tri.v1.y;
+   } else {
+      min.y =  boxHalf.y - tri.v1.y;
+      max.y = -boxHalf.y - tri.v1.y;
+   }
+
+   if (normal.z > 0.0f) {
+      min.z = -boxHalf.z - tri.v1.z;
+      max.z =  boxHalf.z - tri.v1.z;
+   } else {
+      min.z =  boxHalf.z - tri.v1.z;
+      max.z = -boxHalf.z - tri.v1.z;
+   }
+
+   if (kmVec3Dot(&normal, &min)>0.0f) return 0;
+   if (kmVec3Dot(&normal, &max)>=-0.0f) {
+      if (colNormal) {
+         normal.x *= -1; normal.y *= -1; normal.z *= -1;
+         kmVec3Normalize(colNormal, &normal); // memcpy(colNormal, &normal, sizeof(kmVec3));
+         colNormal->x *= 0.1;
+         colNormal->y *= 0.1;
+         colNormal->z *= 0.1;
+      }
+      glhckObjectPosition(wall, &a->v1);
+      glhckObjectRender(wall);
+      glhckObjectPosition(wall, &a->v2);
+      glhckObjectRender(wall);
+      glhckObjectPosition(wall, &a->v3);
+      glhckObjectRender(wall);
+      return 1;
+   }
+
+   return 0;
+}
+
+int objectGeometryContainsObject(glhckObject *a, glhckObject *b, kmVec3 *colNormal)
+{
+   int i, ix;
+   triangle t;
+
+   glhckGeometry *g = glhckObjectGetGeometry(a);
+   if (!g) return 0;
+
+   const kmMat4 *mat = glhckObjectGetMatrix(a);
+   const kmAABB *bAABB = glhckObjectGetAABB(b);
+   for (i = 0; i+2 < g->vertexCount; i+=3) {
+      ix = glhckGeometryGetVertexIndexForIndex(g, i);
+      glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&t.v1, NULL, NULL, NULL);
+      ix = glhckGeometryGetVertexIndexForIndex(g, i+1);
+      glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&t.v2, NULL, NULL, NULL);
+      ix = glhckGeometryGetVertexIndexForIndex(g, i+2);
+      glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&t.v3, NULL, NULL, NULL);
+      kmVec3MultiplyMat4(&t.v1, &t.v1, mat);
+      kmVec3MultiplyMat4(&t.v2, &t.v2, mat);
+      kmVec3MultiplyMat4(&t.v3, &t.v3, mat);
+      if (triangleIntersectsAABB(&t, bAABB, colNormal)) return 1;
+   }
+   return 0;
+}
+
+int objectContainsObject(glhckObject *a, glhckObject *b, kmVec3 *colNormal)
+{
+   glhckObject **childs, *child;
+   unsigned int i, numChilds;
+   const kmAABB *aAABB = glhckObjectGetAABB(a);
+   const kmAABB *bAABB = glhckObjectGetAABB(b);
+   if (kmAABBContainsAABB(aAABB, bAABB) == KM_CONTAINS_NONE)
+      return 0;
+
+   if (!glhckObjectIsRoot(a)) return 1;
+   childs = glhckObjectChildren(a, &numChilds);
+   for (i = 0; i != numChilds; ++i) {
+      child = childs[i];
+      if (objectContainsObject(child, b, colNormal) == KM_CONTAINS_NONE)
+         continue;
+
+      /* now the most expensive check */
+      if (objectGeometryContainsObject(child, b, colNormal))
+         return 1;
+   }
+   return 0;
 }
 
 int main(int argc, char **argv)
@@ -627,12 +854,13 @@ int main(int argc, char **argv)
 
    GameCamera *camera = &data.camera;
    camera->object = glhckCameraNew();
-   camera->radius = 30;
+   camera->radius = 20;
    camera->speed  = 60;
    camera->rotationSpeed = 180;
    camera->rotation.x = 10.0f;
    kmVec3Fill(&camera->offset, 0.0f, 5.0f, 0.0f);
    glhckCameraRange(camera->object, 1.0f, 500.0f);
+   glhckCameraFov(camera->object, 92.0f);
 
    glhckObject *playerText = glhckTextPlane(text, font, 42, "Player", NULL);
    if (playerText) glhckObjectScalef(playerText, 0.05f, 0.05f, 1.0f);
@@ -640,6 +868,20 @@ int main(int argc, char **argv)
    player->object = glhckCubeNew(1.0f);
    player->speed  = 20;
    glhckObjectMaterial(player->object, data.materials.me);
+   glhckObjectDrawAABB(player->object, 1);
+   glhckObjectDrawOBB(player->object, 1);
+
+   glhckAnimator *animator = NULL;
+   unsigned int numBones = 0;
+   glhckBone **bones = glhckObjectBones(player->object, &numBones);
+
+   if (bones) {
+      animator = glhckAnimatorNew();
+      glhckAnimatorAnimation(animator, glhckObjectAnimations(player->object, NULL)[0]);
+      glhckAnimatorInsertBones(animator, bones, numBones);
+      glhckAnimatorUpdate(animator, 0);
+      glhckAnimatorTransform(animator, player->object);
+   }
 
    typedef struct DungeonPart {
       char *file;
@@ -661,11 +903,14 @@ int main(int argc, char **argv)
    parts[3].h = 67.3f;
 
    unsigned int i, c = 15;
+
+#if 0
    glhckObject *cubes[c*2];
    unsigned int p = 2;
    float x = -parts[p].w, sx = x;
    float y = -parts[p].h, sy = y;
    int flip = 1;
+
    for (i = 0; i != 10; ++i) {
       cubes[i] = glhckModelNewEx(parts[p].file, 0.3f, NULL, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
       glhckObjectPositionf(cubes[i], x, -1.0f, y);
@@ -696,13 +941,41 @@ int main(int argc, char **argv)
       }
    }
 
+    p = 0;
+   x = -parts[p].w, sx = x;
+   y = -parts[p].h, sy = y;
+   flip = 1;
+   for (i = 20; i != c; ++i) {
+      cubes[i] = glhckModelNewEx(parts[p].file, 0.3f, NULL, GLHCK_INDEX_BYTE, GLHCK_VERTEX_V3S);
+      glhckObjectPositionf(cubes[i], x, -1.0f, y);
+      if (flip) glhckObjectRotationf(cubes[i], 0, 180.0f, 0);
+
+      y += parts[p].h;
+      if ((i+1) % 5 == 0) {
+         y = sy;
+         x += parts[p].w;
+         flip = !flip;
+      }
+   }
+
    glhckObject *gate = glhckModelNewEx("media/chaosgate/chaosgate.obj", 1.8f, NULL, GLHCK_INDEX_SHORT, GLHCK_VERTEX_V3S);
    glhckObjectRotatef(gate, 0, 35.0f, 0);
    glhckObjectPositionf(gate, 3.0f, 1.5f, 0);
+#endif
 
-   glhckObject *wall = glhckCubeNew(1.0f);
+   wall = glhckCubeNew(1.0f);
    glhckObjectScalef(wall, 0.1f, 10.0f, 0.1f);
    glhckObjectMaterial(wall, data.materials.wall);
+
+   glhckImportModelParameters params;
+   memcpy(&params, glhckImportDefaultModelParameters(), sizeof(glhckImportModelParameters));
+   params.flatten = 1;
+   town = glhckModelNewEx("media/towns/town1.obj", 5.5f, &params, GLHCK_INDEX_SHORT, GLHCK_VERTEX_V3S);
+   glhckMaterial *townMat = glhckMaterialNew(NULL);
+   glhckMaterialDiffuseb(townMat, 50, 50, 50, 255);
+   glhckObjectMaterial(town, townMat);
+   glhckObjectMovef(town, 0, -1.0f, 0);
+   glhckObjectDrawAABB(town, 1);
 
    glfwSetWindowCloseCallback(window, closeCallback);
    glfwSetWindowSizeCallback(window, resizeCallback);
@@ -725,6 +998,7 @@ int main(int argc, char **argv)
 
    RUNNING = 1;
    int col = 0;
+   float anim = 0.0f;
    float fullStateTime = glfwGetTime() + 5.0f;
    float botTime = glfwGetTime();
    unsigned char botFlags = 0;
@@ -796,55 +1070,18 @@ int main(int argc, char **argv)
       }
 
       size_t v, vi;
-      int lcol = col; col = 0; p;
+      int lcol = col; col = 0;
       Client *c2;
 
-#if 0
-      /* visualize */
-      for (i = 0; i != c; ++i) {
-         glhckObject *floor = glhckObjectChildren(cubes[i], NULL)[1];
-         glhckObjectColorb(floor, 255, 255, 255, 255);
+      if (animator && (player->flags & ACTOR_FORWARD || player->flags & ACTOR_BACKWARD)) {
+         anim += 1.5 * data.delta;
+         float min = 2.3;
+         float max = 3.2;
+         if (anim > max) anim = min;
+         if (anim < min) anim = min;
+         glhckAnimatorUpdate(animator, anim);
+         glhckAnimatorTransform(animator, player->object);
       }
-
-      /* collision */
-      for (c2 = data.clients; c2; c2 = c2->next) {
-         const kmAABB *aabb = glhckObjectGetAABB(c2->actor.object);
-         col = 0;
-         for (i = 0; i != c; ++i) {
-            glhckObject *floor = glhckObjectChildren(cubes[i], NULL)[1];
-            const kmAABB *aabbp = glhckObjectGetAABB(floor);
-            if (kmAABBContainsAABB(aabbp, aabb) == KM_CONTAINS_NONE) continue;
-            glhckObjectColorb(floor, 255, 0, 0, 255);
-            const kmMat4 *mat = glhckObjectGetMatrix(floor);
-            glhckGeometry *g = glhckObjectGetGeometry(floor);
-            for (vi = 0, p = 0; vi < g->indexCount; ++vi) {
-               glhckVector3f vt; kmVec3 tvt[3];
-               v = glhckGeometryVertexIndexForIndex(g, vi);
-               glhckGeometryVertexDataForIndex(g, v, &vt, NULL, NULL, NULL, NULL);
-               tvt[p].x = vt.x; tvt[p].y = vt.y; tvt[p].z = vt.z;
-               kmVec3Transform(&tvt[p], &tvt[p], mat);
-
-               if (++p == 3) {
-                  kmVec3 center;
-                  if (PointInTriangle(kmAABBCentre(aabb, &center),
-                           &tvt[0], &tvt[1], &tvt[2])) {
-                     for (p = 0; p != 3; ++p) {
-                        glhckObjectPosition(wall, &tvt[p]);
-                        glhckObjectRender(wall);
-                     }
-                     col = 1;
-                     break;
-                  } p = 0;
-               }
-            }
-         }
-         if (col != lcol && !col) puts("NO COL");
-         if (col) {
-            kmVec3Assign(&c2->actor.position, &c2->actor.lastPosition);
-            kmVec3Assign(&c2->actor.toPosition, &c2->actor.lastPosition);
-         }
-      }
-#endif
 
       /* update me */
       gameCameraUpdate(&data, camera, player);
@@ -868,12 +1105,16 @@ int main(int argc, char **argv)
             //glhckObjectDraw(playerText);
          }
 
+#if 0
          /* draw world */
          for (i = 0; i != c; ++i) {
             glhckObjectDraw(cubes[i]);
          }
 
          glhckObjectDraw(gate);
+#endif
+
+         glhckObjectDraw(town);
 
          /* draw all actors */
          for (c2 = data.clients; c2; c2 = c2->next) {
