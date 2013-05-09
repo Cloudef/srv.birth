@@ -29,6 +29,7 @@ typedef struct GameActor {
    kmVec3 lastPosition;
    kmVec3 toPosition;
    float speed;
+   float fallingSpeed;
    float toRotation;
    float lastActTime;
    float swordY;
@@ -255,7 +256,8 @@ static void handleJoin(ClientData *data, ENetEvent *event)
 
    memset(&client, 0, sizeof(Client));
    client.actor.object = glhckCubeNew(1.0f);
-   client.actor.speed  = data->me->actor.speed;
+   glhckObjectScalef(client.actor.object, 1.0f, 3.0f, 1.0f);
+   client.actor.speed = data->me->actor.speed;
    strncpy(client.host, packet->host, sizeof(client.host));
    client.clientId = packet->clientId;
 
@@ -447,8 +449,10 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
 
    if (actor->flags & ACTOR_JUMP) {
       actor->toPosition.y += speed;
+      actor->fallingSpeed = 0.0f;;
    } else {
-      actor->toPosition.y -= speed;
+      actor->toPosition.y -= actor->fallingSpeed;
+      actor->fallingSpeed += speed * 0.01f;
    }
 
    if (actor->flags & ACTOR_FORWARD) {
@@ -491,6 +495,14 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       }
    }
 
+   kmVec3 colNormal;
+   glhckObjectPosition(actor->object, &actor->toPosition);
+   if (objectContainsObject(town, actor->object, &colNormal)) {
+      // printf("%f, %f, %f\n", colNormal.x, colNormal.y, colNormal.z);
+      kmVec3Add(&actor->toPosition, &actor->position, &colNormal);
+      if (colNormal.y > 0.0) actor->fallingSpeed = 0.0f;
+   }
+
    /* assign last position */
    kmVec3Assign(&actor->lastPosition, &actor->position);
 
@@ -501,14 +513,8 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       kmVec3Interpolate(&actor->position, &actor->position, &actor->toPosition, 0.1f);
    }
 
-   if (actor->position.y < 0.0) actor->position.y = 0.0;
-   if (actor->toPosition.y < 0.0) actor->toPosition.y = -0.0;
    glhckObjectRotation(actor->object, &actor->rotation);
    glhckObjectPosition(actor->object, &actor->position);
-
-   kmVec3 colNormal;
-   if (objectContainsObject(town, actor->object, &colNormal))
-      kmVec3Subtract(&actor->toPosition, &actor->lastPosition, &colNormal);
 
    if (actor->sword) {
       if (!actor->swordD) {
@@ -737,13 +743,7 @@ int triangleIntersectsAABB(const triangle *a, const kmAABB *b, kmVec3 *colNormal
 
    if (kmVec3Dot(&normal, &min)>0.0f) return 0;
    if (kmVec3Dot(&normal, &max)>=-0.0f) {
-      if (colNormal) {
-         normal.x *= -1; normal.y *= -1; normal.z *= -1;
-         kmVec3Normalize(colNormal, &normal); // memcpy(colNormal, &normal, sizeof(kmVec3));
-         colNormal->x *= 0.1;
-         colNormal->y *= 0.1;
-         colNormal->z *= 0.1;
-      }
+      if (colNormal) kmVec3Normalize(colNormal, &normal);
       glhckObjectPosition(wall, &a->v1);
       glhckObjectRender(wall);
       glhckObjectPosition(wall, &a->v2);
@@ -766,7 +766,7 @@ int objectGeometryContainsObject(glhckObject *a, glhckObject *b, kmVec3 *colNorm
 
    const kmMat4 *mat = glhckObjectGetMatrix(a);
    const kmAABB *bAABB = glhckObjectGetAABB(b);
-   for (i = 0; i+2 < g->vertexCount; i+=3) {
+   for (i = 0; i+2 < g->indexCount; i+=3) {
       ix = glhckGeometryGetVertexIndexForIndex(g, i);
       glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&t.v1, NULL, NULL, NULL);
       ix = glhckGeometryGetVertexIndexForIndex(g, i+1);
@@ -785,9 +785,9 @@ int objectContainsObject(glhckObject *a, glhckObject *b, kmVec3 *colNormal)
 {
    glhckObject **childs, *child;
    unsigned int i, numChilds;
-   const kmAABB *aAABB = glhckObjectGetAABB(a);
-   const kmAABB *bAABB = glhckObjectGetAABB(b);
-   if (kmAABBContainsAABB(aAABB, bAABB) == KM_CONTAINS_NONE)
+   const kmAABB *aOBB = glhckObjectGetOBB(a);
+   const kmAABB *bOBB = glhckObjectGetOBB(b);
+   if (kmAABBContainsAABB(aOBB, bOBB) == KM_CONTAINS_NONE)
       return 0;
 
    if (!glhckObjectIsRoot(a)) return 1;
@@ -849,7 +849,7 @@ int main(int argc, char **argv)
    glhckMaterialDiffuseb(data.materials.wall, 0, 255, 0, 255);
 
    glhckText *text = glhckTextNew(512, 512);
-   glhckTextColor(text, 255, 255, 255, 255);
+   glhckTextColorb(text, 255, 255, 255, 255);
    unsigned int font = glhckTextNewFont(text, "media/DejaVuSans.ttf");
 
    GameCamera *camera = &data.camera;
@@ -866,7 +866,8 @@ int main(int argc, char **argv)
    if (playerText) glhckObjectScalef(playerText, 0.05f, 0.05f, 1.0f);
    GameActor *player = &data.me->actor;
    player->object = glhckCubeNew(1.0f);
-   player->speed  = 20;
+   player->speed  = 30;
+   glhckObjectScalef(player->object, 1.0f, 3.0f, 1.0f);
    glhckObjectMaterial(player->object, data.materials.me);
    glhckObjectDrawAABB(player->object, 1);
    glhckObjectDrawOBB(player->object, 1);
@@ -974,7 +975,7 @@ int main(int argc, char **argv)
    glhckMaterial *townMat = glhckMaterialNew(NULL);
    glhckMaterialDiffuseb(townMat, 50, 50, 50, 255);
    glhckObjectMaterial(town, townMat);
-   glhckObjectMovef(town, 0, -1.0f, 0);
+   glhckObjectMovef(town, 0, -5.0f, -8.0f);
    glhckObjectDrawAABB(town, 1);
 
    glfwSetWindowCloseCallback(window, closeCallback);
