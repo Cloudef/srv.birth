@@ -9,8 +9,37 @@
 #include "bams.h"
 #include "types.h"
 
+#include <float.h>
+
+#define IFDO(f, x) { if (x) f(x); x = NULL; }
+
 static int RUNNING = 0;
 static int WIDTH = 800, HEIGHT = 480;
+
+typedef struct kmEllipse {
+   kmVec3 point;
+   kmVec3 radius;
+} kmEllipse;
+
+typedef struct kmTriangle {
+   kmVec3 v1, v2, v3;
+} kmTriangle;
+
+kmVec3* kmVec3Divide(kmVec3 *pOut, const kmVec3 *pV1, const kmVec3 *pV2)
+{
+   pOut->x = pV1->x / pV2->x;
+   pOut->y = pV1->y / pV2->y;
+   pOut->z = pV1->z / pV2->z;
+   return pOut;
+}
+
+kmVec3* kmVec3Multiply(kmVec3 *pOut, const kmVec3 *pV1, const kmVec3 *pV2)
+{
+   pOut->x = pV1->x * pV2->x;
+   pOut->y = pV1->y * pV2->y;
+   pOut->z = pV1->z * pV2->z;
+   return pOut;
+}
 
 enum {
    CAMERA_NONE       = 0,
@@ -495,16 +524,14 @@ void gameActorUpdate(ClientData *data, GameActor *actor)
       }
    }
 
-   kmVec3 colNormal;
-   glhckObjectPosition(actor->object, &actor->toPosition);
-   if (objectContainsObject(town, actor->object, &colNormal)) {
-      // printf("%f, %f, %f\n", colNormal.x, colNormal.y, colNormal.z);
-      kmVec3Add(&actor->toPosition, &actor->position, &colNormal);
-      if (colNormal.y > 0.0) actor->fallingSpeed = 0.0f;
-   }
-
    /* assign last position */
    kmVec3Assign(&actor->lastPosition, &actor->position);
+
+   /* limit */
+   if (actor->toPosition.y < 0.0f) {
+      actor->toPosition.y = 0.0f;
+      actor->fallingSpeed = 0.0f;
+   }
 
    /* movement interpolation */
    if (gameActorFlagsIsMoving(actor->flags)) {
@@ -577,231 +604,584 @@ void gameSendFullPlayerState(ClientData *data)
    gameSend(data, (unsigned char*)&state, sizeof(PacketActorFullState), ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 }
 
-typedef struct triangle {
-   kmVec3 v1, v2, v3;
-} triangle;
+/***
+ * Collision manager
+ * When done and working, move this to glhck.
+ * Pull request the new methods and datatypes to kazmath.
+ *
+ * 1. Create collision world
+ * 2. Setup world primitives
+ * 3. Collide with primitive against world
+ *    a. Test against AABB<->AABB first no matter what primitive is used
+ *    b. Use the primitive<->primtive route against the found AABB collisions
+ * 4. Handle or call response method with the collision data
+ ***/
 
-static int axisTest13_13_23(const triangle *tri, const kmVec3 *edge, const kmVec3 *abs, const kmVec3 *boxHalf)
-{
-   float p1, p2, max, min, rad;
+/* public */
+typedef struct CollisionInData {
+   kmVec3 velocity;
+} CollisionInData;
 
-   p1 = edge->z*tri->v1.y - edge->y*tri->v1.z;
-   p2 = edge->z*tri->v3.y - edge->y*tri->v3.z;
-   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
-   rad = abs->z * boxHalf->y + abs->y * boxHalf->z;
-   if (min > rad || max < -rad) return 0;
+typedef struct CollisionOutData {
+   kmTriangle triangle;
+   kmVec3 intersectionPoint;
+} CollisionOutData;
 
-   p1 = -edge->z*tri->v1.x + edge->x*tri->v1.z;
-   p2 = -edge->z*tri->v3.x + edge->x*tri->v3.z;
-   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
-   rad = abs->z * boxHalf->x + abs->x * boxHalf->z;
-   if (min > rad || max < -rad) return 0;
+typedef struct CollisionResponseInData {
+   kmVec3 gravity;
+} CollisionReponseInData;
 
-   p1 = edge->y*tri->v2.x + edge->x*tri->v2.y;
-   p2 = edge->y*tri->v3.x + edge->x*tri->v3.y;
-   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
-   rad = abs->y * boxHalf->x + abs->x * boxHalf->y;
-   if (min > rad || max < -rad) return 0;
+typedef struct CollisionResponseOutData {
+   kmVec3 position;
+   char falling;
+} CollisionResponseOutData;
 
-   return 1;
+/* internal */
+typedef enum _CollisionType {
+   COLLISION_ELLIPSE,
+   COLLISION_AABB,
+   COLLISION_MESH,
+} _CollisionType;
+
+typedef struct _CollisionPacket {
+   _CollisionType type;
+   union {
+      const kmEllipse *ellipse;
+      const kmAABB *aabb;
+   } primitive;
+
+   /* input data we use to calculate out data */
+   const CollisionInData *data;
+
+   /* out data that can be handled by user
+    * or sent to collision response handler */
+   CollisionOutData *out;
+
+   /* internal data */
+   kmScalar nearestDistance;
+} _CollisionPacket;
+
+typedef struct _CollisionPrimitive {
+   _CollisionType type;
+   union {
+      kmEllipse *ellipse;
+      kmAABB *aabb;
+      glhckObject *mesh;
+      void *any;
+   } data;
+   struct _CollisionPrimitive *next;
+} _CollisionPrimitive;
+
+typedef struct _CollisionWorld {
+   _CollisionPrimitive *primitives;
+} _CollisionWorld;
+
+/* public */
+typedef _CollisionWorld CollisionWorld;
+typedef _CollisionPrimitive CollisionPrimitive;
+
+static void kmSwap(kmScalar *a, kmScalar *b) {
+   const kmScalar tmp = *a;
+   *a = *b;
+   *b = tmp;
 }
 
-static int axisTest13_13_12(const triangle *tri, const kmVec3 *edge, const kmVec3 *abs, const kmVec3 *boxHalf)
+kmScalar kmPlaneDistanceTo(const kmPlane *pIn, const kmVec3 *pV1)
 {
-   float p1, p2, max, min, rad;
-
-   p1 = edge->z*tri->v1.y - edge->y*tri->v1.z;
-   p2 = edge->z*tri->v3.y - edge->y*tri->v3.z;
-   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
-   rad = abs->z * boxHalf->y + abs->y * boxHalf->z;
-   if (min > rad || max < -rad) return 0;
-
-   p1 = -edge->z*tri->v1.x + edge->x*tri->v1.z;
-   p2 = -edge->z*tri->v3.x + edge->x*tri->v3.z;
-   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
-   rad = abs->z * boxHalf->x + abs->x * boxHalf->z;
-   if (min > rad || max < -rad) return 0;
-
-   p1 = edge->y*tri->v1.x + edge->x*tri->v1.y;
-   p2 = edge->y*tri->v2.x + edge->x*tri->v2.y;
-   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
-   rad = abs->y * boxHalf->x + abs->x * boxHalf->y;
-   if (min > rad || max < -rad) return 0;
-
-   return 1;
+   const kmVec3 normal = {pIn->a, pIn->b, pIn->c};
+   return kmVec3Dot(pV1, &normal) * pIn->d;
 }
 
-static int axisTest12_12_23(const triangle *tri, const kmVec3 *edge, const kmVec3 *abs, const kmVec3 *boxHalf)
+/* internal method */
+kmBool kmTrianglePointIsOnSameSide(const kmVec3 *p1, const kmVec3 *p2, const kmVec3 *a, const kmVec3 *b)
 {
-   float p1, p2, max, min, rad;
+   static kmVec3 zero = {0,0,0};
+   kmVec3 bminusa, p1minusa, p2minusa, cp1, cp2;
+   kmScalar res;
 
-   p1 = edge->z*tri->v1.y - edge->y*tri->v1.z;
-   p2 = edge->z*tri->v2.y - edge->y*tri->v2.z;
-   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
-   rad = abs->z * boxHalf->y + abs->y * boxHalf->z;
-   if (min > rad || max < -rad) return 0;
+   kmVec3Subtract(&bminusa, b, a);
+   kmVec3Subtract(&p1minusa, p1, a);
+   kmVec3Subtract(&p2minusa, p2, a);
+   kmVec3Cross(&cp1, &bminusa, &p1minusa);
+   kmVec3Cross(&cp2, &bminusa, &p2minusa);
 
-   p1 = -edge->z*tri->v1.x + edge->x*tri->v1.z;
-   p2 = -edge->z*tri->v2.x + edge->x*tri->v2.z;
-   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
-   rad = abs->z * boxHalf->x + abs->x * boxHalf->z;
-   if (min > rad || max < -rad) return 0;
-
-   p1 = edge->y*tri->v2.x + edge->x*tri->v2.y;
-   p2 = edge->y*tri->v3.x + edge->x*tri->v3.y;
-   if (p1 < p2) { min = p1; max = p2; } else { min = p2; max = p1; }
-   rad = abs->y * boxHalf->x + abs->x * boxHalf->y;
-   if (min > rad || max < -rad) return 0;
-
-   return 1;
+   res = kmVec3Dot(&cp1, &cp2);
+#if !USE_DOUBLE_PRECISION
+   if (res < 0) {
+      /* This catches some floating point troubles. */
+      kmVec3Normalize(&bminusa, &bminusa);
+      kmVec3Normalize(&p1minusa, &p1minusa);
+      kmVec3Cross(&cp1, &bminusa, &p1minusa);
+      if (kmVec3AreEqual(&cp1, &zero)) res = 0.0;
+   }
+#endif
+   return (res >= 0.0?KM_TRUE:KM_FALSE);
 }
 
-/* assign the max units from vectors to v1 */
-#define maxV2(v1, v2) \
-   if ((v1)->x < (v2)->x) (v1)->x = (v2)->x; \
-   if ((v1)->y < (v2)->y) (v1)->y = (v2)->y
-#define maxV3(v1, v2) \
-   maxV2(v1, v2);     \
-   if ((v1)->z < (v2)->z) (v1)->z = (v2)->z
-
-/* assign the min units from vectors to v1 */
-#define minV2(v1, v2) \
-   if ((v1)->x > (v2)->x) (v1)->x = (v2)->x; \
-   if ((v1)->y > (v2)->y) (v1)->y = (v2)->y
-#define minV3(v1, v2) \
-   minV2(v1, v2);     \
-   if ((v1)->z > (v2)->z) (v1)->z = (v2)->z
-
-int triangleIntersectsAABB(const triangle *a, const kmAABB *b, kmVec3 *colNormal)
+/* assumes that the point is already on the plane of the triangle. */
+static kmEnum kmTriangleContainsPoint(const kmTriangle *pIn, const kmVec3 *pV1)
 {
-   kmVec3 center, absVec, normal, boxHalf, min, max;
-   triangle tri, edge;
+   if (kmTrianglePointIsOnSameSide(pV1, &pIn->v1, &pIn->v2, &pIn->v3) &&
+       kmTrianglePointIsOnSameSide(pV1, &pIn->v2, &pIn->v1, &pIn->v3) &&
+       kmTrianglePointIsOnSameSide(pV1, &pIn->v3, &pIn->v1, &pIn->v2) == KM_TRUE)
+      return KM_CONTAINS_ALL;
+   return KM_CONTAINS_NONE;
+}
 
-   kmAABBCentre(b, &center);
-   boxHalf.x = kmAABBDiameterX(b)*0.5;
-   boxHalf.y = kmAABBDiameterY(b)*0.5;
-   boxHalf.z = kmAABBDiameterZ(b)*0.5;
+static kmBool getLowestRoot(kmScalar a, kmScalar b, kmScalar c, kmScalar maxR, kmScalar *root)
+{
+   /* check if solution exists */
+   const kmScalar determinant = b*b - 4.0f*a*c;
 
-   kmVec3Subtract(&tri.v1, &a->v1, &center);
-   kmVec3Subtract(&tri.v2, &a->v2, &center);
-   kmVec3Subtract(&tri.v3, &a->v3, &center);
+   /* if determinant is negative, no solution */
+   if (determinant < 0.0f || a == 0.0f)
+      return KM_FALSE;
 
-   kmVec3Subtract(&edge.v1, &tri.v2, &tri.v1);
-   kmVec3Subtract(&edge.v2, &tri.v3, &tri.v2);
-   kmVec3Subtract(&edge.v3, &tri.v1, &tri.v3);
+   /* calculate two roots: (if det == 0 then x1 == x2
+    * but lets disregard that slight optimization) */
 
-   absVec.x = fabsf(edge.v1.x);
-   absVec.y = fabsf(edge.v1.y);
-   absVec.z = fabsf(edge.v1.z);
-   if (!axisTest13_13_23(&tri, &edge.v1, &absVec, &boxHalf)) return 0;
+   const kmScalar sqrtD = sqrtf(determinant);
+   const kmScalar invDA = 1.0/(2*a);
+   kmScalar r1 = (-b - sqrtD) * invDA;
+   kmScalar r2 = (-b + sqrtD) * invDA;
 
-   absVec.x = fabsf(edge.v2.x);
-   absVec.y = fabsf(edge.v2.y);
-   absVec.z = fabsf(edge.v2.z);
-   if (!axisTest13_13_12(&tri, &edge.v2, &absVec, &boxHalf)) return 0;
+   /* r1 must always be less */
+   if (r1 > r2) kmSwap(&r1, &r2);
 
-   absVec.x = fabsf(edge.v3.x);
-   absVec.y = fabsf(edge.v3.y);
-   absVec.z = fabsf(edge.v3.z);
-   if (!axisTest12_12_23(&tri, &edge.v3, &absVec, &boxHalf)) return 0;
+   /* get lowest root */
+   if (r1 > 0 && r1 < maxR) {
+      if (root) *root = r1;
+      return KM_TRUE;
+   }
 
-   memcpy(&max, &tri.v1, sizeof(kmVec3));
-   memcpy(&min, &tri.v1, sizeof(kmVec3));
-   maxV3(&max, &tri.v2);
-   minV3(&min, &tri.v2);
-   maxV3(&max, &tri.v3);
-   minV3(&min, &tri.v3);
+   /* it's possible that we want r2, this can happen if r1 < 0 */
+   if (r2 > 0 && r2 < maxR) {
+      if (root) *root = r2;
+      return KM_TRUE;
+   }
 
-   if (min.x > boxHalf.x || max.x < -boxHalf.x) return 0;
-   if (min.y > boxHalf.y || max.y < -boxHalf.y) return 0;
-   if (min.z > boxHalf.z || max.z < -boxHalf.z) return 0;
+   return KM_FALSE;
+}
 
-   kmVec3Cross(&normal, &edge.v1, &edge.v2);
-   if (normal.x > 0.0f) {
-      min.x = -boxHalf.x - tri.v1.x;
-      max.x =  boxHalf.x - tri.v1.x;
+/* for each edge or vertex a quadratic equation has to be solved:
+ * a*t^2 + b*t + c = 0. We calculate a,b, and c for each test. */
+static kmBool testTrianglePoint(const kmVec3 *base, const kmVec3 *point, const kmVec3 *velocity, kmScalar vsq, kmScalar time, kmScalar *outTime)
+{
+   kmVec3 tmp;
+   kmScalar b, c;
+   kmVec3Subtract(&tmp, base, point);
+   b = 2.0f * kmVec3Dot(velocity, &tmp);
+   kmVec3Subtract(&tmp, point, base);
+   c = kmVec3LengthSq(&tmp) - 1.0f;
+   return (getLowestRoot(vsq, b, c, time, outTime)?KM_TRUE:KM_FALSE);
+}
+
+static kmBool testEdgePoint(const kmVec3 *base, const kmVec3 *point1, const kmVec3 *point2, const kmVec3 *velocity, kmScalar vsq, kmScalar time, kmScalar *outTime, kmVec3 *outPoint)
+{
+   kmVec3 edge, baseToVertex;
+   kmScalar edgeSquaredLength, edgeDotVelocity, edgeDotBaseToVertex;
+   kmScalar a, b, c, f;
+   kmVec3Subtract(&edge, point2, point1);
+   kmVec3Subtract(&baseToVertex, point1, base);
+   edgeSquaredLength = kmVec3LengthSq(&edge);
+   edgeDotVelocity = kmVec3Dot(&edge, velocity);
+   edgeDotBaseToVertex = kmVec3Dot(&edge, &baseToVertex);
+
+   a = edgeSquaredLength * -vsq + edgeDotVelocity * edgeDotVelocity;
+   b = edgeSquaredLength * (2.0 * kmVec3Dot(velocity, &baseToVertex)) - 2.0 * edgeDotVelocity * edgeDotBaseToVertex;
+   c = edgeSquaredLength * (1.0 - kmVec3LengthSq(&baseToVertex)) + edgeDotBaseToVertex * edgeDotBaseToVertex;
+
+   // does the swept sphere collide against infinite edge?
+   if (getLowestRoot(a, b, c, time, outTime)) {
+      f = (edgeDotVelocity * (*outTime) - edgeDotBaseToVertex) / edgeSquaredLength;
+      if (!(f >= 0.0 && f  <= 1.0)) return KM_FALSE;
+   }
+
+   if (outPoint) {
+      kmVec3Scale(&edge, &edge, f);
+      kmVec3Add(outPoint, point1, &edge);
+   }
+   return KM_TRUE;
+}
+
+/* assumes the triangle is given in point's space (ellipse, aabb, etc..) */
+static kmBool kmVec3CollidesTriangle(const kmVec3 *pIn, const kmTriangle *triangle, const kmVec3 *velocity, kmVec3 *outIntersectionPoint, kmScalar *outDistanceToCollision)
+{
+   kmPlane plane;
+   kmVec3 intersectionPoint, normalizedVelocity;
+   kmScalar signedDistToTrianglePlane, normalDotVelocity, time, t0, t1;
+   kmBool embeddedInPlane = KM_FALSE, foundCollision = KM_FALSE;
+   assert(pIn && triangle && velocity);
+
+   if (outIntersectionPoint) memset(outIntersectionPoint, 0, sizeof(kmVec3));
+   if (outDistanceToCollision) *outDistanceToCollision = 0;
+   kmVec3Normalize(&normalizedVelocity, velocity);
+
+   /* make plane containing this triangle */
+   kmPlaneFromPoints(&plane, &triangle->v1, &triangle->v2, &triangle->v3);
+
+   /* check only front-facing triangles */
+   if (kmPlaneClassifyPoint(&plane, &normalizedVelocity) == POINT_BEHIND_PLANE)
+      return KM_FALSE;
+
+   /* calculate the signed distance from sphere position to triangle plane */
+   signedDistToTrianglePlane = kmPlaneDistanceTo(&plane, pIn);
+   normalDotVelocity = kmPlaneDotNormal(&plane, velocity);
+
+   /* if sphere is travelling parrallel to the plane: */
+   if (normalDotVelocity == 0.0f) {
+      if (fabsf(signedDistToTrianglePlane) >= 1.0f) {
+         /* sphere is not embedded in plane, no collision possible: */
+         return KM_FALSE;
+      } else {
+         /* sphere is embedded in plane, it intersects in the whole range [0..1] */
+         embeddedInPlane = 1;
+         t0 = 0.0;
+         t1 = 1.0;
+      }
    } else {
-      min.x =  boxHalf.x - tri.v1.x;
-      max.x = -boxHalf.x - tri.v1.x;
+      /* normalDotVelocity is not 0, calculate intersection interval: */
+      t0 = (-1.0-signedDistToTrianglePlane)/normalDotVelocity;
+      t1 = ( 1.0-signedDistToTrianglePlane)/normalDotVelocity;
+
+      /* t0 must always be less */
+      if (t0 > t1) kmSwap(&t0, &t1);
+
+      /* check that at least one result is within range: */
+      if (t0 > 1.0f || t1 < 0.0f) {
+         /* both t values are outside [0..1], impossibru */
+         return;
+      }
+
+      /* clamp to [0..1] */
+      t0 = kmClamp(t0, 0.0, 1.0);
+      t1 = kmClamp(t1, 0.0, 1.0);
    }
 
-   if (normal.y > 0.0f) {
-      min.y = -boxHalf.y - tri.v1.y;
-      max.y =  boxHalf.y - tri.v1.y;
-   } else {
-      min.y =  boxHalf.y - tri.v1.y;
-      max.y = -boxHalf.y - tri.v1.y;
+   /* if there is any intersection, it's between t0 && t1 */
+
+   /* first check the easy case: Collision within the triangle;
+    * if this happens, it must be at t0 and this is when the sphere
+    * rests on the front side of the triangle plane. This can only happen
+    * if the sphere is not embedded in the triangle plane. */
+   if (embeddedInPlane == KM_FALSE) {
+      kmVec3 baseMinusNormal, t0MultVelocity, planeIntersection;
+      baseMinusNormal.x = pIn->x-plane.a;
+      baseMinusNormal.y = pIn->y-plane.b;
+      baseMinusNormal.z = pIn->z-plane.c;
+      kmVec3Scale(&t0MultVelocity, velocity, t0);
+      kmVec3Add(&planeIntersection, &baseMinusNormal, &t0MultVelocity);
+      if (kmTriangleContainsPoint(triangle, &planeIntersection) != KM_CONTAINS_NONE) {
+         foundCollision = KM_TRUE;
+         time = t0;
+         memcpy(&intersectionPoint, &planeIntersection, sizeof(kmVec3));
+      }
    }
 
-   if (normal.z > 0.0f) {
-      min.z = -boxHalf.z - tri.v1.z;
-      max.z =  boxHalf.z - tri.v1.z;
-   } else {
-      min.z =  boxHalf.z - tri.v1.z;
-      max.z = -boxHalf.z - tri.v1.z;
+   /* if we havent found a collision already we will have to sweep
+    * the sphere against points and edges of the triangle. Note: A
+    * collision inside the triangle will always happen before a
+    * vertex or edge collision. */
+   if (foundCollision == KM_FALSE) {
+      kmVec3 point;
+      kmScalar velocitySquaredLength, newTime;
+      velocitySquaredLength = kmVec3LengthSq(velocity);
+
+      /* t.v1 */
+      if (testTrianglePoint(pIn, &triangle->v1, velocity, velocitySquaredLength, time, &newTime)) {
+         foundCollision = KM_TRUE;
+         time = newTime;
+         memcpy(&intersectionPoint, &triangle->v1, sizeof(kmVec3));
+      }
+
+      /* t.v2 */
+      if (!foundCollision) {
+         if (testTrianglePoint(pIn, &triangle->v2, velocity, velocitySquaredLength, time, &newTime)) {
+            foundCollision = KM_TRUE;
+            time = newTime;
+            memcpy(&intersectionPoint, &triangle->v2, sizeof(kmVec3));
+         }
+      }
+
+      /* t.v3 */
+      if (!foundCollision) {
+         if (testTrianglePoint(pIn, &triangle->v3, velocity, velocitySquaredLength, time, &newTime)) {
+            foundCollision = KM_TRUE;
+            time = newTime;
+            memcpy(&intersectionPoint, &triangle->v3, sizeof(kmVec3));
+         }
+      }
+
+      /* t.v1 --- t.v2 */
+      if (testEdgePoint(pIn, &triangle->v1, &triangle->v2, velocity, velocitySquaredLength, time, &newTime, &point)) {
+         foundCollision = KM_TRUE;
+         time = newTime;
+         memcpy(&intersectionPoint, &point, sizeof(kmVec3));
+      }
+
+      /* t.v2 --- t.v3 */
+      if (testEdgePoint(pIn, &triangle->v2, &triangle->v3, velocity, velocitySquaredLength, time, &newTime, &point)) {
+         foundCollision = KM_TRUE;
+         time = newTime;
+         memcpy(&intersectionPoint, &point, sizeof(kmVec3));
+      }
+
+      /* t.v3 --- t.v1 */
+      if (testEdgePoint(pIn, &triangle->v3, &triangle->v1, velocity, velocitySquaredLength, time, &newTime, &point)) {
+         foundCollision = KM_TRUE;
+         time = newTime;
+         memcpy(&intersectionPoint, &point, sizeof(kmVec3));
+      }
    }
 
-   if (kmVec3Dot(&normal, &min)>0.0f) return 0;
-   if (kmVec3Dot(&normal, &max)>=-0.0f) {
-      if (colNormal) kmVec3Normalize(colNormal, &normal);
-      glhckObjectPosition(wall, &a->v1);
-      glhckObjectRender(wall);
-      glhckObjectPosition(wall, &a->v2);
-      glhckObjectRender(wall);
-      glhckObjectPosition(wall, &a->v3);
-      glhckObjectRender(wall);
-      return 1;
-   }
+   /* no collision */
+   if (foundCollision == KM_FALSE)
+      return KM_FALSE;
 
-   return 0;
+   /* return collision data */
+   if (outDistanceToCollision) *outDistanceToCollision = time*kmVec3Length(velocity);
+   if (outIntersectionPoint) memcpy(outIntersectionPoint, &intersectionPoint, sizeof(kmVec3));
+   return KM_TRUE;
 }
 
-int objectGeometryContainsObject(glhckObject *a, glhckObject *b, kmVec3 *colNormal)
+static void _collisionEllipseCollideWithAABB(CollisionPrimitive *primitive, _CollisionPacket *packet)
 {
+}
+
+static void _collisionAABBCollideWithAABB(CollisionPrimitive *primitive, _CollisionPacket *packet)
+{
+}
+
+static void _collisionMeshCollideWithAABB(CollisionPrimitive *primitive, _CollisionPacket *packet)
+{
+}
+
+static void _collisionEllipseCollideWithEllipse(CollisionPrimitive *primitive, _CollisionPacket *packet)
+{
+}
+
+static void _collisionAABBCollideWithEllipse(CollisionPrimitive *primitive, _CollisionPacket *packet)
+{
+}
+
+static void _collisionMeshCollideWithEllipse(CollisionPrimitive *primitive, _CollisionPacket *packet)
+{
+   static kmVec3 zero = {0,0,0};
+   const CollisionInData *data = packet->data;
+   const kmEllipse *ellipse = packet->primitive.ellipse;
+   kmVec3 eSpacePosition, eSpaceVelocity;
+   kmTriangle triangle;
+   glhckGeometry *g;
    int i, ix;
-   triangle t;
 
-   glhckGeometry *g = glhckObjectGetGeometry(a);
-   if (!g) return 0;
+   if (!(g = glhckObjectGetGeometry(primitive->data.mesh)))
+      return;
 
-   const kmMat4 *mat = glhckObjectGetMatrix(a);
-   const kmAABB *bAABB = glhckObjectGetAABB(b);
+   /* convert to ellipse space */
+   kmVec3Divide(&eSpacePosition, &ellipse->point, &ellipse->radius);
+   kmVec3Divide(&eSpaceVelocity, &data->velocity, &ellipse->radius);
+
    for (i = 0; i+2 < g->indexCount; i+=3) {
       ix = glhckGeometryGetVertexIndexForIndex(g, i);
-      glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&t.v1, NULL, NULL, NULL);
+      glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&triangle.v1, NULL, NULL, NULL);
       ix = glhckGeometryGetVertexIndexForIndex(g, i+1);
-      glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&t.v2, NULL, NULL, NULL);
+      glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&triangle.v2, NULL, NULL, NULL);
       ix = glhckGeometryGetVertexIndexForIndex(g, i+2);
-      glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&t.v3, NULL, NULL, NULL);
-      kmVec3MultiplyMat4(&t.v1, &t.v1, mat);
-      kmVec3MultiplyMat4(&t.v2, &t.v2, mat);
-      kmVec3MultiplyMat4(&t.v3, &t.v3, mat);
-      if (triangleIntersectsAABB(&t, bAABB, colNormal)) return 1;
+      glhckGeometryGetVertexDataForIndex(g, ix, (glhckVector3f*)&triangle.v3, NULL, NULL, NULL);
    }
-   return 0;
 }
 
-int objectContainsObject(glhckObject *a, glhckObject *b, kmVec3 *colNormal)
+static void _collisionWorldCollideWithAABB(CollisionWorld *object, _CollisionPacket *packet)
 {
-   glhckObject **childs, *child;
-   unsigned int i, numChilds;
-   const kmAABB *aOBB = glhckObjectGetOBB(a);
-   const kmAABB *bOBB = glhckObjectGetOBB(b);
-   if (kmAABBContainsAABB(aOBB, bOBB) == KM_CONTAINS_NONE)
-      return 0;
+   _CollisionPrimitive *p;
+   const CollisionInData *data = packet->data;
+   const kmEllipse *ellipse = packet->primitive.ellipse;
 
-   if (!glhckObjectIsRoot(a)) return 1;
-   childs = glhckObjectChildren(a, &numChilds);
-   for (i = 0; i != numChilds; ++i) {
-      child = childs[i];
-      if (objectContainsObject(child, b, colNormal) == KM_CONTAINS_NONE)
-         continue;
-
-      /* now the most expensive check */
-      if (objectGeometryContainsObject(child, b, colNormal))
-         return 1;
+   for (p = object->primitives; p; p = p->next) {
+      switch (p->type) {
+         case COLLISION_ELLIPSE:
+            _collisionEllipseCollideWithAABB(p, packet);
+            break;
+         case COLLISION_AABB:
+            _collisionAABBCollideWithAABB(p, packet);
+            break;
+         case COLLISION_MESH:
+            _collisionMeshCollideWithAABB(p, packet);
+            break;
+         default:break;
+      }
    }
-   return 0;
+}
+
+static void _collisionWorldCollideWithEllipse(CollisionWorld *object, _CollisionPacket *packet)
+{
+   _CollisionPrimitive *p;
+
+   for (p = object->primitives; p; p = p->next) {
+      switch (p->type) {
+         case COLLISION_ELLIPSE:
+            _collisionEllipseCollideWithEllipse(p, packet);
+            break;
+         case COLLISION_AABB:
+            _collisionAABBCollideWithEllipse(p, packet);
+            break;
+         case COLLISION_MESH:
+            _collisionMeshCollideWithEllipse(p, packet);
+            break;
+         default:break;
+      }
+   }
+}
+
+static void _collisionWorldAddPrimitive(CollisionWorld *object, _CollisionPrimitive *primitive)
+{
+   _CollisionPrimitive *p;
+   assert(object && primitive);
+
+   if (!(p = object->primitives))
+      object->primitives = primitive;
+   else {
+      for (; p && p->next; p = p->next);
+      p->next = primitive;
+   }
+}
+
+CollisionWorld* collisionWorldNew(void)
+{
+   CollisionWorld *object;
+
+   if (!(object = calloc(1, sizeof(CollisionWorld))))
+      goto fail;
+
+   return object;
+
+fail:
+   return NULL;
+}
+
+void collisionWorldFree(CollisionWorld *object)
+{
+   _CollisionPrimitive *p, *pn;
+   assert(object);
+
+   for (p = object->primitives; p; p = pn) {
+      pn = p->next;
+      free(p);
+   }
+
+   free(object);
+}
+
+CollisionPrimitive* collisionWorldAddEllipse(CollisionWorld *object, const kmEllipse *ellipse)
+{
+   kmEllipse *ellipseCopy = NULL;
+   _CollisionPrimitive *primitive = NULL;
+   assert(object && ellipse);
+
+   if (!(primitive = calloc(1, sizeof(_CollisionPrimitive))))
+      goto fail;
+
+   if (!(ellipseCopy = malloc(sizeof(kmEllipse))))
+      goto fail;
+
+   memcpy(ellipseCopy, ellipse, sizeof(kmEllipse));
+   primitive->type = COLLISION_ELLIPSE;
+   primitive->data.ellipse = ellipseCopy;
+   _collisionWorldAddPrimitive(object, primitive);
+   return primitive;
+
+fail:
+   IFDO(free, primitive);
+   IFDO(free, ellipseCopy);
+   return NULL;
+}
+
+CollisionPrimitive* collisionWorldAddAABB(CollisionWorld *object, const kmAABB *aabb)
+{
+   kmAABB *aabbCopy = NULL;
+   _CollisionPrimitive *primitive = NULL;
+   assert(object && aabb);
+
+   if (!(primitive = calloc(1, sizeof(_CollisionPrimitive))))
+      goto fail;
+
+   if (!(aabbCopy = malloc(sizeof(kmAABB))))
+      goto fail;
+
+   memcpy(aabbCopy, aabb, sizeof(kmAABB));
+   primitive->type = COLLISION_AABB;
+   primitive->data.aabb = aabbCopy;
+   _collisionWorldAddPrimitive(object, primitive);
+   return primitive;
+
+fail:
+   IFDO(free, primitive);
+   IFDO(free, aabbCopy);
+   return NULL;
+}
+
+const CollisionPrimitive* collisionWorldAddObject(CollisionWorld *object, glhckObject *gobject)
+{
+   _CollisionPrimitive *primitive = NULL;
+   assert(object && gobject);
+
+   if (!(primitive = calloc(1, sizeof(_CollisionPrimitive))))
+      goto fail;
+
+   primitive->type = COLLISION_MESH;
+   primitive->data.mesh = glhckObjectRef(gobject);
+   _collisionWorldAddPrimitive(object, primitive);
+   return primitive;
+
+fail:
+   IFDO(free, primitive);
+   return NULL;
+}
+
+void collisionWorldRemovePrimitive(CollisionWorld *object, CollisionPrimitive *primitive)
+{
+   _CollisionPrimitive *p;
+   assert(object && primitive);
+
+   if (primitive == (p = object->primitives))
+      object->primitives = primitive->next;
+   else {
+      for (; p && p->next != primitive; p = p->next);
+      if (p) p->next = primitive->next;
+      else object->primitives = NULL;
+   }
+
+   switch (primitive->type) {
+      case COLLISION_MESH:
+         IFDO(glhckObjectFree, primitive->data.mesh);
+         break;
+      default:
+         IFDO(free, primitive->data.any);
+         break;
+   }
+   IFDO(free, primitive);
+}
+
+void collisionWorldCollideEllipse(CollisionWorld *object, const kmEllipse *ellipse, const CollisionInData *data, CollisionOutData *out)
+{
+   _CollisionPacket packet;
+   packet.type = COLLISION_ELLIPSE;
+   packet.primitive.ellipse = ellipse;
+   packet.data = data;
+   packet.out = out;
+   packet.nearestDistance = FLT_MAX;
+   _collisionWorldCollideWithEllipse(object, &packet);
+}
+
+void collisionWorldCollideAABB(CollisionWorld *object, const kmAABB *aabb, const CollisionInData *data, CollisionOutData *out)
+{
+   _CollisionPacket packet;
+   packet.type = COLLISION_AABB;
+   packet.primitive.aabb = aabb;
+   packet.data = data;
+   packet.out = out;
+   packet.nearestDistance = FLT_MAX;
+   _collisionWorldCollideWithAABB(object, &packet);
 }
 
 int main(int argc, char **argv)
@@ -970,7 +1350,7 @@ int main(int argc, char **argv)
 
    glhckImportModelParameters params;
    memcpy(&params, glhckImportDefaultModelParameters(), sizeof(glhckImportModelParameters));
-   params.flatten = 1;
+   params.flatten = 0;
    town = glhckModelNewEx("media/towns/town1.obj", 5.5f, &params, GLHCK_INDEX_SHORT, GLHCK_VERTEX_V3S);
    glhckMaterial *townMat = glhckMaterialNew(NULL);
    glhckMaterialDiffuseb(townMat, 50, 50, 50, 255);
