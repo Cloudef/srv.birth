@@ -18,6 +18,7 @@ enum {
    ACTOR_RIGHT       = 8,
    ACTOR_JUMP        = 16,
    ACTOR_ATTACK      = 32,
+   ACTOR_SPRINT      = 64,
 };
 
 typedef enum PacketId {
