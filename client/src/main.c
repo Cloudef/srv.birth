@@ -1558,7 +1558,7 @@ int main(int argc, char **argv)
    glhckObject *screen = glhckSpriteNew(frames[0], 0, 0);
    glhckMaterial *screenMaterial = glhckObjectGetMaterial(screen);
    glhckMaterialOptions(screenMaterial, 0);
-   glhckObjectScalef(screen, 0.1f, 0.1f, 1.0f);
+   glhckObjectScalef(screen, 0.2f, 0.2f, 1.0f);
    glhckObjectRotatef(screen, 0, -90, 0);
    glhckObjectMovef(screen, 45, 35, 0);
    glhckObjectCull(screen, 0);
