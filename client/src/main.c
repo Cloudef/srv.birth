@@ -3,7 +3,7 @@
 #include <string.h>
 #include <assert.h>
 #include <enet/enet.h>
-#include <GL/glfw3.h>
+#include <GLFW/glfw3.h>
 #include <glhck/glhck.h>
 
 #include "bams.h"
@@ -1718,7 +1718,7 @@ int main(int argc, char **argv)
       if (glfwGetKey(window, GLFW_KEY_Q)) {
          player->flags |= ACTOR_ATTACK;
       }
-      if (glfwGetKey(window, GLFW_KEY_LSHIFT)) {
+      if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT)) {
          player->flags |= ACTOR_SPRINT;
       }
 
