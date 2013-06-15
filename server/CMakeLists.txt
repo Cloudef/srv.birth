@@ -4,6 +4,7 @@ SET(SERVER_SRC
 INCLUDE_DIRECTORIES(
   ${kazmath_SOURCE_DIR}/src
   ${srv.birth_SOURCE_DIR}/common
+  ${enet_SOURCE_DIR}/src/include
 )
 
 ADD_EXECUTABLE(server ${SERVER_SRC})
