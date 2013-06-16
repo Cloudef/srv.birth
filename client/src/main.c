@@ -1483,7 +1483,8 @@ int main(int argc, char **argv)
    if (!glhckContextCreate(argc, argv))
       return EXIT_FAILURE;
 
-   if (!glhckDisplayCreate(WIDTH, HEIGHT, GLHCK_RENDER_AUTO))
+   if (!glhckDisplayCreate(WIDTH, HEIGHT,
+            (argc>1&&!strcmp(argv[1], "-fixpipe")?GLHCK_RENDER_OPENGL_FIXED_PIPELINE:GLHCK_RENDER_AUTO)))
       return EXIT_FAILURE;
 
    if (initEnet("localhost", 1234, &data) != RETURN_OK)
@@ -1664,7 +1665,7 @@ int main(int argc, char **argv)
    glhckLight *light[numLights];
    for (li = 0; li != numLights; ++li) {
       light[li] = glhckLightNew();
-      glhckLightAttenf(light[li], 0.0f, 0.0f, 0.0025f);
+      glhckLightAttenf(light[li], 0.0f, 0.0f, 0.01f);
       glhckLightCutoutf(light[li], 45.0f, 0.0f);
       glhckLightPointLightFactor(light[li], 0.4f);
       glhckLightColorb(light[li], 155, 155, 255, 255);
