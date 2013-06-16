@@ -1487,7 +1487,9 @@ int main(int argc, char **argv)
             (argc>1&&!strcmp(argv[1], "-fixpipe")?GLHCK_RENDER_OPENGL_FIXED_PIPELINE:GLHCK_RENDER_AUTO)))
       return EXIT_FAILURE;
 
-   if (initEnet("localhost", 1234, &data) != RETURN_OK)
+   const char *host = getenv("SRVBIRTH_SERVER");
+   if (!host) host = "localhost";
+   if (initEnet(host, 1234, &data) != RETURN_OK)
       return EXIT_FAILURE;
 
    glfwSwapInterval(0);
