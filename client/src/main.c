@@ -1478,6 +1478,8 @@ int main(int argc, char **argv)
    if (!(window = glfwCreateWindow(WIDTH, HEIGHT, "srv.birth", NULL, NULL)))
       return EXIT_FAILURE;
 
+   glfwSetWindowCloseCallback(window, closeCallback);
+   glfwSetWindowSizeCallback(window, resizeCallback);
    glfwMakeContextCurrent(window);
 
    if (!glhckContextCreate(argc, argv))
@@ -1487,13 +1489,118 @@ int main(int argc, char **argv)
             (argc>1&&!strcmp(argv[1], "-fixpipe")?GLHCK_RENDER_OPENGL_FIXED_PIPELINE:GLHCK_RENDER_AUTO)))
       return EXIT_FAILURE;
 
+   glfwSwapInterval(0);
+   glEnable(GL_MULTISAMPLE);
+
+   glhckText *text = glhckTextNew(512, 512);
+   glhckTextColorb(text, 255, 255, 255, 255);
+   unsigned int font = glhckTextFontNewKakwafont(text, NULL);
+
+   glhckObject *cube = glhckCubeNew(1.0);
+   glhckMaterial *cubeMat = glhckMaterialNew(NULL);
+   glhckObjectMaterial(cube, cubeMat);
+   glhckMaterialFree(cubeMat);
+
+   glhckObject *horizon = glhckPlaneNew(128, 1);
+   glhckObjectPositionf(horizon, 0, -7, -53);
+   glhckMaterial *horizonMat = glhckMaterialNew(glhckTextureNewFromFile("media/gradient.png", NULL, glhckTextureDefaultSpriteParameters()));
+   glhckObjectMaterial(horizon, horizonMat);
+   glhckMaterialFree(horizonMat);
+
+   glhckObject *water = glhckPlaneNew(128, 128);
+   glhckObjectPositionf(water, 0, -8, 0);
+   glhckObjectRotatef(water, -90, 0, 0);
+
+   glhckMaterial *waterMat = glhckMaterialNew(glhckTextureNewFromFile("media/water.jpg", NULL, NULL));
+   glhckObjectMaterial(water, waterMat);
+   glhckMaterialFree(waterMat);
+   glhckMaterialTextureScalef(waterMat, 4.0f, 4.0f);
+   glhckMaterialDiffuseb(waterMat, 120, 120, 120, 255);
+   glhckMaterialBlendFunc(waterMat, GLHCK_ONE, GLHCK_ONE);
+
+   glhckCamera *menuCamera = glhckCameraNew();
+   glhckCameraRange(menuCamera, 1.0f, 500.0f);
+   glhckCameraFov(menuCamera, 32.0f);
+
+   RUNNING = 1;
+   float waterPos = 0.0f, horizonPos = 0.0f, textPos = 0.0f;
+   while (RUNNING && glfwGetKey(window, GLFW_KEY_ESCAPE) != GLFW_PRESS && glfwGetKey(window, GLFW_KEY_ENTER) != GLFW_PRESS) {
+      last       = now;
+      now        = glfwGetTime();
+      data.delta = now - last;
+      glfwPollEvents();
+
+      glhckCameraUpdate(menuCamera);
+      glhckRenderPass(glfwGetKey(window, GLFW_KEY_O)?GLHCK_PASS_OVERDRAW:glhckRenderPassDefaults());
+
+      horizonPos = floatInterpolate(horizonPos, 53.0f, data.delta*1.8);
+      if (horizonPos < 53.0f) {
+         glhckObjectPositionf(horizon, 0, -7, -horizonPos);
+         glhckObjectScalef(horizon, 128, 1*53/horizonPos, 1.0f);
+         glhckObjectPositionf(water, 0, -8, 53-horizonPos);
+         glhckMaterialDiffuseb(waterMat, 120*horizonPos/53, 120*horizonPos/53, 120*horizonPos/53, 255);
+      }
+
+      if (horizonPos > 46.0f) {
+         textPos = floatInterpolate(textPos, 1.0f, data.delta*4.0);
+      }
+
+      waterPos += 0.02f * data.delta;
+      glhckMaterialTextureOffsetf(waterMat, sin(waterPos), 0);
+      glhckObjectRender(water);
+      glhckMaterialTextureOffsetf(waterMat, -sin(waterPos), 0);
+      glhckObjectRender(water);
+      glhckObjectRender(horizon);
+
+      glhckObjectScalef(cube, 1.0+sin(waterPos*8.0)*0.5, 1.5, 1.0+sin(waterPos*8.0)*0.5);
+      glhckMaterialDiffuseb(cubeMat, 0, 0, 0, 75*horizonPos/53);
+      glhckMaterialBlendFunc(cubeMat, GLHCK_SRC_ALPHA, GLHCK_ONE_MINUS_SRC_ALPHA);
+      glhckObjectPositionf(cube, -128*0.06, -9.5, -128*0.3);
+      glhckObjectRender(cube);
+
+      glhckObjectScalef(cube, 1.5, 1.5, 1.5);
+      glhckMaterialDiffuseb(cubeMat, 250, 250, 250, 255*horizonPos/53);
+      glhckMaterialBlendFunc(cubeMat, GLHCK_SRC_ALPHA, GLHCK_ONE_MINUS_SRC_ALPHA);
+      glhckObjectPositionf(cube, -128*0.06, -2.0*horizonPos/53-sin(waterPos*8.0), -128*0.3);
+      glhckObjectRender(cube);
+
+      glhckTextColorb(text, 0, 0, 0, 255);
+      glhckTextStash(text, font, 48, WIDTH-259, 86*textPos, "srv.birth", NULL);
+      glhckTextStash(text, font, 12, WIDTH-79*textPos, HEIGHT*0.95-18*2+1, "New Game", NULL);
+      glhckTextStash(text, font, 12, WIDTH-79*textPos*0.8, HEIGHT*0.95-18*1+1, "Continue", NULL);
+      glhckTextStash(text, font, 12, WIDTH-79*textPos*0.6, HEIGHT*0.95-18*0+1, "Exit", NULL);
+      glhckTextRender(text);
+      glhckTextClear(text);
+
+      glhckTextColorb(text, 255, 255, 255, 255);
+      glhckTextStash(text, font, 48, WIDTH-260, 85*horizonPos/53, "srv.birth", NULL);
+      glhckTextStash(text, font, 12, WIDTH-80*textPos, HEIGHT*0.95-18*2, "New Game", NULL);
+      glhckTextStash(text, font, 12, WIDTH-80*textPos*0.8, HEIGHT*0.95-18*1, "Continue", NULL);
+      glhckTextStash(text, font, 12, WIDTH-80*textPos*0.6, HEIGHT*0.95-18*0, "Exit", NULL);
+      glhckTextStash(text, font, 12, 0, HEIGHT, WIN_TITLE, NULL);
+      glhckTextRender(text);
+      glhckTextClear(text);
+
+      glfwSwapBuffers(window);
+      glhckRenderClear(GLHCK_DEPTH_BUFFER | GLHCK_COLOR_BUFFER);
+
+      if (fpsDelay < now) {
+         if (duration > 0.0f) {
+            FPS = (float)frameCounter / duration;
+            snprintf(WIN_TITLE, sizeof(WIN_TITLE)-1, "OpenGL [FPS: %d]", FPS);
+            glfwSetWindowTitle(window, WIN_TITLE);
+            frameCounter = 0; fpsDelay = now + 1; duration = 0;
+         }
+      }
+
+      ++frameCounter;
+      duration += data.delta;
+   }
+
    const char *host = getenv("SRVBIRTH_SERVER");
    if (!host) host = "localhost";
    if (initEnet(host, 1234, &data) != RETURN_OK)
       return EXIT_FAILURE;
-
-   glfwSwapInterval(0);
-   glEnable(GL_MULTISAMPLE);
 
    data.materials.me = glhckMaterialNew(NULL);
    data.materials.player = glhckMaterialNew(NULL);
@@ -1501,10 +1608,6 @@ int main(int argc, char **argv)
    glhckMaterialDiffuseb(data.materials.me, 255, 0, 0, 255);
    glhckMaterialDiffuseb(data.materials.player, 0, 255, 0, 255);
    glhckMaterialDiffuseb(data.materials.wall, 0, 255, 0, 255);
-
-   glhckText *text = glhckTextNew(512, 512);
-   glhckTextColorb(text, 255, 255, 255, 255);
-   unsigned int font = glhckTextFontNewKakwafont(text, NULL);
 
    GameCamera *camera = &data.camera;
    camera->object = glhckCameraNew();
@@ -1659,9 +1762,6 @@ int main(int argc, char **argv)
       collisionWorldAddObject(world, childs[i]);
    }
 #endif
-
-   glfwSetWindowCloseCallback(window, closeCallback);
-   glfwSetWindowSizeCallback(window, resizeCallback);
 
    int li, numLights = 1;
    glhckLight *light[numLights];
